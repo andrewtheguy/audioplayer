@@ -12,6 +12,7 @@ interface HistoryEntry {
   url: string;
   lastPlayedAt: string;
   position: number;
+  gain?: number; // Gain multiplier (1 = 100%, 2 = 200%, etc.)
 }
 
 interface AudioPlayerProps {
@@ -65,6 +66,10 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const saveIntervalRef = useRef<number | null>(null);
   const currentUrlRef = useRef<string>("");
   const isLiveStreamRef = useRef<boolean>(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const gainRef = useRef<number>(1);
 
   const [url, setUrl] = useState(initialUrl);
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
@@ -79,11 +84,63 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [isLiveStream, setIsLiveStream] = useState(false);
+  const [gainEnabled, setGainEnabled] = useState(false);
+  const [gain, setGain] = useState(1); // 1 = 100%
 
-  // Keep ref in sync with state for use in callbacks
+  // Keep refs in sync with state for use in callbacks
   useEffect(() => {
     isLiveStreamRef.current = isLiveStream;
   }, [isLiveStream]);
+
+  useEffect(() => {
+    gainRef.current = gain;
+  }, [gain]);
+
+  // Setup Web Audio API for gain control
+  const setupGainNode = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || sourceNodeRef.current) return; // Already setup
+
+    const ctx = new AudioContext();
+    const source = ctx.createMediaElementSource(audio);
+    const gainNode = ctx.createGain();
+
+    source.connect(gainNode);
+    gainNode.connect(ctx.destination);
+
+    audioContextRef.current = ctx;
+    sourceNodeRef.current = source;
+    gainNodeRef.current = gainNode;
+  }, []);
+
+  // Apply gain value when it changes
+  useEffect(() => {
+    if (gainEnabled && gainNodeRef.current) {
+      gainNodeRef.current.gain.value = gain;
+    }
+  }, [gain, gainEnabled]);
+
+  // Handle gain toggle
+  const handleGainToggle = useCallback(() => {
+    if (!gainEnabled) {
+      setupGainNode();
+      // Restore gain from history if available
+      const historyEntry = history.find((h) => h.url === currentUrlRef.current);
+      if (historyEntry?.gain) {
+        setGain(historyEntry.gain);
+        if (gainNodeRef.current) {
+          gainNodeRef.current.gain.value = historyEntry.gain;
+        }
+      }
+    } else {
+      // Reset gain to 1 when disabling
+      if (gainNodeRef.current) {
+        gainNodeRef.current.gain.value = 1;
+      }
+      setGain(1);
+    }
+    setGainEnabled(!gainEnabled);
+  }, [gainEnabled, history, setupGainNode]);
 
   // Save current position to history (skip for live streams)
   const saveCurrentPosition = useCallback(() => {
@@ -93,10 +150,13 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
     setHistory((prev) => {
       const existingIndex = prev.findIndex((h) => h.url === currentUrlRef.current);
+      const existingEntry = existingIndex >= 0 ? prev[existingIndex] : null;
       const entry: HistoryEntry = {
         url: currentUrlRef.current,
         lastPlayedAt: new Date().toISOString(),
         position: audio.currentTime,
+        // Save gain if currently using gain control, otherwise preserve existing
+        gain: gainRef.current !== 1 ? gainRef.current : existingEntry?.gain,
       };
 
       let newHistory: HistoryEntry[];
@@ -140,15 +200,10 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   }, [saveCurrentPosition]);
 
 
-  const loadStream = (streamUrl?: string, seekPosition?: number) => {
-    const urlToLoad = streamUrl ?? url;
-    if (!urlToLoad.trim()) {
-      setError("Please enter a URL");
-      return;
-    }
-
+  // Load directly from a history entry (with position)
+  const loadFromHistory = (entry: HistoryEntry) => {
     // Save current position before switching
-    if (currentUrlRef.current && currentUrlRef.current !== urlToLoad) {
+    if (currentUrlRef.current && currentUrlRef.current !== entry.url) {
       saveCurrentPosition();
     }
 
@@ -158,16 +213,16 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     setCurrentTime(0);
     setDuration(0);
     setIsLiveStream(false);
-
-    // Use provided seek position, or check history for saved position
-    if (seekPosition !== undefined) {
-      pendingSeekPositionRef.current = seekPosition;
-    } else {
-      const historyEntry = history.find((h) => h.url === urlToLoad);
-      if (historyEntry) {
-        pendingSeekPositionRef.current = historyEntry.position;
-      }
+    // Reset gain state when loading (user must re-enable manually)
+    setGainEnabled(false);
+    setGain(1);
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = 1;
     }
+
+    // Set pending seek position from history entry
+    pendingSeekPositionRef.current = entry.position;
+    const urlToLoad = entry.url;
 
     const audio = audioRef.current;
     if (!audio) return;
@@ -235,6 +290,94 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       audio.src = urlToLoad;
       onLoadSuccess();
     }
+  };
+
+  // Load a URL - redirects to loadFromHistory if URL exists in history
+  const loadUrl = (urlToLoad: string) => {
+    const historyEntry = history.find((h) => h.url === urlToLoad);
+    if (historyEntry) {
+      loadFromHistory(historyEntry);
+      return;
+    }
+
+    // Fresh load (no history entry)
+    if (currentUrlRef.current && currentUrlRef.current !== urlToLoad) {
+      saveCurrentPosition();
+    }
+
+    setError(null);
+    setIsLoaded(false);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setIsLiveStream(false);
+    setGainEnabled(false);
+    setGain(1);
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = 1;
+    }
+    pendingSeekPositionRef.current = null;
+
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+
+    currentUrlRef.current = urlToLoad;
+
+    const onLoadSuccess = () => {
+      setIsLoaded(true);
+      setNowPlaying(urlToLoad);
+      setUrl("");
+    };
+
+    if (urlToLoad.includes(".m3u8")) {
+      if (Hls.isSupported()) {
+        const hls = new Hls();
+        hlsRef.current = hls;
+
+        hls.loadSource(urlToLoad);
+        hls.attachMedia(audio);
+
+        let hasCalledLoadSuccess = false;
+        hls.on(Hls.Events.LEVEL_LOADED, (_event, data) => {
+          const isLive = data.details.live === true;
+          setIsLiveStream(isLive);
+          if (!hasCalledLoadSuccess) {
+            hasCalledLoadSuccess = true;
+            onLoadSuccess();
+          }
+        });
+
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.fatal) {
+            setError(`HLS Error: ${data.type} - ${data.details}`);
+            setIsLoaded(false);
+          }
+        });
+      } else if (audio.canPlayType("application/vnd.apple.mpegurl")) {
+        audio.src = urlToLoad;
+        onLoadSuccess();
+      } else {
+        setError("HLS is not supported in this browser");
+      }
+    } else {
+      audio.src = urlToLoad;
+      onLoadSuccess();
+    }
+  };
+
+  // Load from URL input
+  const loadStream = () => {
+    const urlToLoad = url.trim();
+    if (!urlToLoad) {
+      setError("Please enter a URL");
+      return;
+    }
+    loadUrl(urlToLoad);
   };
 
   const togglePlayPause = () => {
@@ -326,7 +469,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       saveHistory(newHistory);
       return newHistory;
     });
-    loadStream(entry.url, entry.position);
+    loadFromHistory(entry);
   };
 
   const copyToClipboard = async (text: string) => {
@@ -509,6 +652,37 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
             onValueChange={handleVolumeChange}
             className="w-24"
           />
+        </div>
+
+        {/* Gain Control */}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleGainToggle}
+            disabled={!isLoaded}
+            className={`text-xs px-2 py-1 rounded border transition-colors ${
+              gainEnabled
+                ? "bg-primary text-primary-foreground border-primary"
+                : "bg-background text-muted-foreground border-border hover:bg-accent"
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
+            title="Enable amplification beyond 100%"
+          >
+            Boost
+          </button>
+          {gainEnabled && (
+            <>
+              <Slider
+                value={[gain]}
+                min={1}
+                max={3}
+                step={0.1}
+                onValueChange={(v) => setGain(v[0])}
+                className="w-24"
+              />
+              <span className="text-xs text-muted-foreground w-12">
+                {Math.round(gain * 100)}%
+              </span>
+            </>
+          )}
         </div>
       </div>
 
