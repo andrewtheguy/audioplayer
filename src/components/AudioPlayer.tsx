@@ -1,11 +1,39 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import Hls from "hls.js";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 
+const STORAGE_KEY = "audioplayer-history";
+const MAX_HISTORY_ENTRIES = 100;
+const SAVE_INTERVAL_MS = 5000;
+
+interface HistoryEntry {
+  url: string;
+  lastPlayedAt: string;
+  position: number;
+}
+
 interface AudioPlayerProps {
   initialUrl?: string;
+}
+
+// localStorage utility functions
+function getHistory(): HistoryEntry[] {
+  try {
+    const data = localStorage.getItem(STORAGE_KEY);
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(history: HistoryEntry[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
+  } catch {
+    // Storage full or unavailable
+  }
 }
 
 function formatTime(seconds: number): string {
@@ -16,9 +44,26 @@ function formatTime(seconds: number): string {
   return `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }
 
+function formatDate(isoString: string): string {
+  const date = new Date(isoString);
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function truncateUrl(url: string, maxLength = 40): string {
+  if (url.length <= maxLength) return url;
+  return url.slice(0, maxLength - 3) + "...";
+}
+
 export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const saveIntervalRef = useRef<number | null>(null);
+  const currentUrlRef = useRef<string>("");
 
   const [url, setUrl] = useState(initialUrl);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -27,19 +72,89 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const [volume, setVolume] = useState(1);
   const [isLoaded, setIsLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [pendingSeekPosition, setPendingSeekPosition] = useState<number | null>(null);
 
+  // Load history on mount
+  useEffect(() => {
+    setHistory(getHistory());
+  }, []);
+
+  // Save current position to history
+  const saveCurrentPosition = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || !currentUrlRef.current || !isFinite(audio.currentTime)) return;
+
+    setHistory((prev) => {
+      const existingIndex = prev.findIndex((h) => h.url === currentUrlRef.current);
+      const entry: HistoryEntry = {
+        url: currentUrlRef.current,
+        lastPlayedAt: new Date().toISOString(),
+        position: audio.currentTime,
+      };
+
+      let newHistory: HistoryEntry[];
+      if (existingIndex >= 0) {
+        newHistory = [entry, ...prev.filter((_, i) => i !== existingIndex)];
+      } else {
+        newHistory = [entry, ...prev].slice(0, MAX_HISTORY_ENTRIES);
+      }
+
+      saveHistory(newHistory);
+      return newHistory;
+    });
+  }, []);
+
+  // Start/stop save interval based on playing state
+  useEffect(() => {
+    if (isPlaying && currentUrlRef.current) {
+      saveIntervalRef.current = window.setInterval(saveCurrentPosition, SAVE_INTERVAL_MS);
+    } else {
+      if (saveIntervalRef.current) {
+        clearInterval(saveIntervalRef.current);
+        saveIntervalRef.current = null;
+      }
+    }
+
+    return () => {
+      if (saveIntervalRef.current) {
+        clearInterval(saveIntervalRef.current);
+      }
+    };
+  }, [isPlaying, saveCurrentPosition]);
+
+  // Save on unmount
   useEffect(() => {
     return () => {
+      saveCurrentPosition();
       if (hlsRef.current) {
         hlsRef.current.destroy();
       }
     };
-  }, []);
+  }, [saveCurrentPosition]);
 
-  const loadStream = () => {
-    if (!url.trim()) {
+  // Handle pending seek after load
+  useEffect(() => {
+    if (isLoaded && pendingSeekPosition !== null) {
+      const audio = audioRef.current;
+      if (audio) {
+        audio.currentTime = pendingSeekPosition;
+        setCurrentTime(pendingSeekPosition);
+      }
+      setPendingSeekPosition(null);
+    }
+  }, [isLoaded, pendingSeekPosition]);
+
+  const loadStream = (streamUrl?: string, seekPosition?: number) => {
+    const urlToLoad = streamUrl ?? url;
+    if (!urlToLoad.trim()) {
       setError("Please enter a URL");
       return;
+    }
+
+    // Save current position before switching
+    if (currentUrlRef.current && currentUrlRef.current !== urlToLoad) {
+      saveCurrentPosition();
     }
 
     setError(null);
@@ -47,6 +162,10 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(0);
+
+    if (seekPosition !== undefined) {
+      setPendingSeekPosition(seekPosition);
+    }
 
     const audio = audioRef.current;
     if (!audio) return;
@@ -56,12 +175,15 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       hlsRef.current = null;
     }
 
-    if (url.includes(".m3u8")) {
+    currentUrlRef.current = urlToLoad;
+    setUrl(urlToLoad);
+
+    if (urlToLoad.includes(".m3u8")) {
       if (Hls.isSupported()) {
         const hls = new Hls();
         hlsRef.current = hls;
 
-        hls.loadSource(url);
+        hls.loadSource(urlToLoad);
         hls.attachMedia(audio);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -75,13 +197,13 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
           }
         });
       } else if (audio.canPlayType("application/vnd.apple.mpegurl")) {
-        audio.src = url;
+        audio.src = urlToLoad;
         setIsLoaded(true);
       } else {
         setError("HLS is not supported in this browser");
       }
     } else {
-      audio.src = url;
+      audio.src = urlToLoad;
       setIsLoaded(true);
     }
   };
@@ -113,6 +235,11 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     }
   };
 
+  const handlePause = () => {
+    setIsPlaying(false);
+    saveCurrentPosition();
+  };
+
   const handleSeek = (value: number[]) => {
     const audio = audioRef.current;
     if (audio && isFinite(value[0])) {
@@ -129,8 +256,70 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     }
   };
 
+  const handleHistorySelect = (entry: HistoryEntry) => {
+    loadStream(entry.url, entry.position);
+  };
+
+  const handleDeleteEntry = (e: React.MouseEvent, urlToDelete: string) => {
+    e.stopPropagation();
+    setHistory((prev) => {
+      const newHistory = prev.filter((h) => h.url !== urlToDelete);
+      saveHistory(newHistory);
+      return newHistory;
+    });
+  };
+
+  const handleClearHistory = () => {
+    setHistory([]);
+    saveHistory([]);
+  };
+
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6">
+      {/* History List */}
+      {history.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium">History</label>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleClearHistory}
+              className="text-xs text-muted-foreground hover:text-destructive"
+            >
+              Clear All
+            </Button>
+          </div>
+          <div className="max-h-48 overflow-y-auto space-y-1 border rounded-md p-2">
+            {history.map((entry) => (
+              <div
+                key={entry.url}
+                onClick={() => handleHistorySelect(entry)}
+                className="flex items-center justify-between p-2 rounded hover:bg-accent cursor-pointer group"
+              >
+                <div className="flex-1 min-w-0 mr-2">
+                  <div className="text-sm truncate" title={entry.url}>
+                    {truncateUrl(entry.url)}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {formatDate(entry.lastPlayedAt)} &middot; {formatTime(entry.position)}
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={(e) => handleDeleteEntry(e, entry.url)}
+                  className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                >
+                  <XIcon className="w-4 h-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* URL Input */}
       <div className="space-y-2">
         <label className="text-sm font-medium">HLS Stream URL</label>
         <div className="flex gap-2">
@@ -141,7 +330,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
             placeholder="Enter HLS URL (.m3u8)"
             onKeyDown={(e) => e.key === "Enter" && loadStream()}
           />
-          <Button onClick={loadStream}>Load</Button>
+          <Button onClick={() => loadStream()}>Load</Button>
         </div>
       </div>
 
@@ -156,7 +345,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
+        onPause={handlePause}
         onEnded={() => setIsPlaying(false)}
         onError={() => setError("Audio playback error")}
       />
@@ -242,6 +431,21 @@ function VolumeIcon({ className }: { className?: string }) {
       xmlns="http://www.w3.org/2000/svg"
     >
       <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
+    </svg>
+  );
+}
+
+function XIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
     </svg>
   );
 }
