@@ -66,6 +66,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const currentUrlRef = useRef<string>("");
 
   const [url, setUrl] = useState(initialUrl);
+  const [nowPlaying, setNowPlaying] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -74,6 +75,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [pendingSeekPosition, setPendingSeekPosition] = useState<number | null>(null);
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
 
   // Load history on mount
   useEffect(() => {
@@ -178,6 +180,12 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     currentUrlRef.current = urlToLoad;
     setUrl(urlToLoad);
 
+    const onLoadSuccess = () => {
+      setIsLoaded(true);
+      setNowPlaying(urlToLoad);
+      setUrl("");
+    };
+
     if (urlToLoad.includes(".m3u8")) {
       if (Hls.isSupported()) {
         const hls = new Hls();
@@ -187,7 +195,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         hls.attachMedia(audio);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          setIsLoaded(true);
+          onLoadSuccess();
         });
 
         hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -198,13 +206,13 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         });
       } else if (audio.canPlayType("application/vnd.apple.mpegurl")) {
         audio.src = urlToLoad;
-        setIsLoaded(true);
+        onLoadSuccess();
       } else {
         setError("HLS is not supported in this browser");
       }
     } else {
       audio.src = urlToLoad;
-      setIsLoaded(true);
+      onLoadSuccess();
     }
   };
 
@@ -260,8 +268,32 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     loadStream(entry.url, entry.position);
   };
 
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedUrl(text);
+      setTimeout(() => setCopiedUrl(null), 500);
+    } catch {
+      // Fallback for older browsers
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+      setCopiedUrl(text);
+      setTimeout(() => setCopiedUrl(null), 500);
+    }
+  };
+
+  const handleCopyEntry = (e: React.MouseEvent, url: string) => {
+    e.stopPropagation();
+    copyToClipboard(url);
+  };
+
   const handleDeleteEntry = (e: React.MouseEvent, urlToDelete: string) => {
     e.stopPropagation();
+    if (!confirm("Delete this entry from history?")) return;
     setHistory((prev) => {
       const newHistory = prev.filter((h) => h.url !== urlToDelete);
       saveHistory(newHistory);
@@ -270,55 +302,13 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   };
 
   const handleClearHistory = () => {
+    if (!confirm("Clear all history? This cannot be undone.")) return;
     setHistory([]);
     saveHistory([]);
   };
 
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6">
-      {/* History List */}
-      {history.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-medium">History</label>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleClearHistory}
-              className="text-xs text-muted-foreground hover:text-destructive"
-            >
-              Clear All
-            </Button>
-          </div>
-          <div className="max-h-48 overflow-y-auto space-y-1 border rounded-md p-2">
-            {history.map((entry) => (
-              <div
-                key={entry.url}
-                onClick={() => handleHistorySelect(entry)}
-                className="flex items-center justify-between p-2 rounded hover:bg-accent cursor-pointer group"
-              >
-                <div className="flex-1 min-w-0 mr-2">
-                  <div className="text-sm truncate" title={entry.url}>
-                    {truncateUrl(entry.url)}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {formatDate(entry.lastPlayedAt)} &middot; {formatTime(entry.position)}
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={(e) => handleDeleteEntry(e, entry.url)}
-                  className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
-                >
-                  <XIcon className="w-4 h-4" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* URL Input */}
       <div className="space-y-2">
         <label className="text-sm font-medium">HLS Stream URL</label>
@@ -337,6 +327,27 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       {error && (
         <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
           {error}
+        </div>
+      )}
+
+      {/* Now Playing */}
+      {nowPlaying && (
+        <div className="space-y-1">
+          <label className="text-sm font-medium">Now Playing</label>
+          <div className="flex items-center gap-2">
+            <div className="text-sm text-muted-foreground truncate flex-1" title={nowPlaying}>
+              {nowPlaying}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => copyToClipboard(nowPlaying)}
+              className={`h-6 w-6 p-0 shrink-0 ${copiedUrl === nowPlaying ? "text-green-500" : "text-muted-foreground hover:text-foreground"}`}
+              title={copiedUrl === nowPlaying ? "Copied!" : "Copy URL"}
+            >
+              {copiedUrl === nowPlaying ? <CheckIcon className="w-4 h-4" /> : <CopyIcon className="w-4 h-4" />}
+            </Button>
+          </div>
         </div>
       )}
 
@@ -392,6 +403,61 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
           />
         </div>
       </div>
+
+      {/* History List */}
+      {history.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium">History</label>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleClearHistory}
+              className="text-xs text-muted-foreground hover:text-destructive"
+            >
+              Clear All
+            </Button>
+          </div>
+          <div className="max-h-48 overflow-y-auto space-y-1 border rounded-md p-2">
+            {history.map((entry) => (
+              <div
+                key={entry.url}
+                onClick={() => handleHistorySelect(entry)}
+                className="flex items-center justify-between p-2 rounded hover:bg-accent cursor-pointer group"
+              >
+                <div className="flex-1 min-w-0 mr-2">
+                  <div className="text-sm truncate" title={entry.url}>
+                    {truncateUrl(entry.url)}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {formatDate(entry.lastPlayedAt)} &middot; {formatTime(entry.position)}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => handleCopyEntry(e, entry.url)}
+                    className={`h-6 w-6 p-0 ${copiedUrl === entry.url ? "opacity-100 text-green-500" : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground"}`}
+                    title={copiedUrl === entry.url ? "Copied!" : "Copy URL"}
+                  >
+                    {copiedUrl === entry.url ? <CheckIcon className="w-4 h-4" /> : <CopyIcon className="w-4 h-4" />}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => handleDeleteEntry(e, entry.url)}
+                    className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                    title="Delete"
+                  >
+                    <XIcon className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -446,6 +512,37 @@ function XIcon({ className }: { className?: string }) {
       xmlns="http://www.w3.org/2000/svg"
     >
       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+    </svg>
+  );
+}
+
+function CopyIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
     </svg>
   );
 }
