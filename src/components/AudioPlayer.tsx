@@ -64,6 +64,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const hlsRef = useRef<Hls | null>(null);
   const saveIntervalRef = useRef<number | null>(null);
   const currentUrlRef = useRef<string>("");
+  const isLiveStreamRef = useRef<boolean>(false);
 
   const [url, setUrl] = useState(initialUrl);
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
@@ -77,16 +78,23 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const [pendingSeekPosition, setPendingSeekPosition] = useState<number | null>(null);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [isLiveStream, setIsLiveStream] = useState(false);
 
   // Load history on mount
   useEffect(() => {
     setHistory(getHistory());
   }, []);
 
-  // Save current position to history
+  // Keep ref in sync with state for use in callbacks
+  useEffect(() => {
+    isLiveStreamRef.current = isLiveStream;
+  }, [isLiveStream]);
+
+  // Save current position to history (skip for live streams)
   const saveCurrentPosition = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || !currentUrlRef.current || !isFinite(audio.currentTime)) return;
+    if (isLiveStreamRef.current) return; // Don't save position for live streams
 
     setHistory((prev) => {
       const existingIndex = prev.findIndex((h) => h.url === currentUrlRef.current);
@@ -108,9 +116,9 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     });
   }, []);
 
-  // Start/stop save interval based on playing state
+  // Start/stop save interval based on playing state (skip for live streams)
   useEffect(() => {
-    if (isPlaying && currentUrlRef.current) {
+    if (isPlaying && currentUrlRef.current && !isLiveStream) {
       saveIntervalRef.current = window.setInterval(saveCurrentPosition, SAVE_INTERVAL_MS);
     } else {
       if (saveIntervalRef.current) {
@@ -124,7 +132,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         clearInterval(saveIntervalRef.current);
       }
     };
-  }, [isPlaying, saveCurrentPosition]);
+  }, [isPlaying, isLiveStream, saveCurrentPosition]);
 
   // Save on unmount
   useEffect(() => {
@@ -165,6 +173,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(0);
+    setIsLiveStream(false);
 
     if (seekPosition !== undefined) {
       setPendingSeekPosition(seekPosition);
@@ -195,8 +204,19 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         hls.loadSource(urlToLoad);
         hls.attachMedia(audio);
 
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          onLoadSuccess();
+        let hasCalledLoadSuccess = false;
+        hls.on(Hls.Events.LEVEL_LOADED, (_event, data) => {
+          // If #EXT-X-PLAYLIST-TYPE:VOD is missing, treat as live stream
+          const isLive = data.details.type !== 'VOD';
+          setIsLiveStream(isLive);
+          if (isLive) {
+            setPendingSeekPosition(null); // Don't seek for live streams
+          }
+          // Only mark as loaded after we know the stream type (once)
+          if (!hasCalledLoadSuccess) {
+            hasCalledLoadSuccess = true;
+            onLoadSuccess();
+          }
         });
 
         hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -206,6 +226,8 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
           }
         });
       } else if (audio.canPlayType("application/vnd.apple.mpegurl")) {
+        // Native HLS support (Safari) - can't detect live status from manifest
+        // Assume VOD for native playback since we can't access manifest directly
         audio.src = urlToLoad;
         onLoadSuccess();
       } else {
@@ -373,14 +395,16 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
       <div className="space-y-4">
         <div className="flex items-center justify-center gap-4">
-          <button
-            onClick={() => seekRelative(-15)}
-            disabled={!isLoaded}
-            className="flex items-center justify-center w-12 h-12 rounded-full hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Back 15 seconds"
-          >
-            <Skip15BackIcon className="w-12 h-12" />
-          </button>
+          {!isLiveStream && (
+            <button
+              onClick={() => seekRelative(-15)}
+              disabled={!isLoaded}
+              className="flex items-center justify-center w-12 h-12 rounded-full hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Back 15 seconds"
+            >
+              <Skip15BackIcon className="w-12 h-12" />
+            </button>
+          )}
           <button
             onClick={togglePlayPause}
             disabled={!isLoaded}
@@ -392,30 +416,41 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
               <PlayCircleIcon className="w-16 h-16" />
             )}
           </button>
-          <button
-            onClick={() => seekRelative(30)}
-            disabled={!isLoaded}
-            className="flex items-center justify-center w-12 h-12 rounded-full hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Forward 30 seconds"
-          >
-            <Skip30ForwardIcon className="w-12 h-12" />
-          </button>
+          {!isLiveStream && (
+            <button
+              onClick={() => seekRelative(30)}
+              disabled={!isLoaded}
+              className="flex items-center justify-center w-12 h-12 rounded-full hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Forward 30 seconds"
+            >
+              <Skip30ForwardIcon className="w-12 h-12" />
+            </button>
+          )}
         </div>
 
-        <div className="space-y-2">
-          <Slider
-            value={[currentTime]}
-            max={duration || 100}
-            step={1}
-            onValueChange={handleSeek}
-            disabled={!isLoaded || !isFinite(duration)}
-            className="w-full"
-          />
-          <div className="flex justify-between text-xs text-muted-foreground">
-            <span>{formatTime(currentTime)}</span>
-            <span>{formatTime(duration)}</span>
+        {isLiveStream ? (
+          <div className="flex items-center justify-center py-4">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white rounded-full text-sm font-medium">
+              <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
+              LIVE
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="space-y-2">
+            <Slider
+              value={[currentTime]}
+              max={duration || 100}
+              step={1}
+              onValueChange={handleSeek}
+              disabled={!isLoaded || !isFinite(duration)}
+              className="w-full"
+            />
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>{formatTime(currentTime)}</span>
+              <span>{formatTime(duration)}</span>
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center gap-3">
           <VolumeIcon className="w-4 h-4 text-muted-foreground" />
