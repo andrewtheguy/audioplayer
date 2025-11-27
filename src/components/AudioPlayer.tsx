@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 
-const STORAGE_KEY = "audioplayer-history";
+const STORAGE_KEY = "com.audioplayer.history.v1";
 const MAX_HISTORY_ENTRIES = 100;
 const SAVE_INTERVAL_MS = 5000;
 
@@ -159,8 +159,14 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     setDuration(0);
     setIsLiveStream(false);
 
+    // Use provided seek position, or check history for saved position
     if (seekPosition !== undefined) {
       pendingSeekPositionRef.current = seekPosition;
+    } else {
+      const historyEntry = history.find((h) => h.url === urlToLoad);
+      if (historyEntry) {
+        pendingSeekPositionRef.current = historyEntry.position;
+      }
     }
 
     const audio = audioRef.current;
