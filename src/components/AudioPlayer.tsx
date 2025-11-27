@@ -206,8 +206,8 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
         let hasCalledLoadSuccess = false;
         hls.on(Hls.Events.LEVEL_LOADED, (_event, data) => {
-          // If #EXT-X-PLAYLIST-TYPE:VOD is missing, treat as live stream
-          const isLive = data.details.type !== 'VOD';
+          // Live if: data.details.live is true
+          const isLive = data.details.live === true;
           setIsLiveStream(isLive);
           if (isLive) {
             setPendingSeekPosition(null); // Don't seek for live streams
