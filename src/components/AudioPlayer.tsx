@@ -296,6 +296,27 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     }
   };
 
+  const jumpToLiveEdge = () => {
+    if (!isLiveStream) return;
+
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (hlsRef.current) {
+      hlsRef.current.startLoad();
+    }
+
+    if (audio.seekable.length > 0) {
+      const liveEdge = audio.seekable.end(audio.seekable.length - 1);
+      if (isFinite(liveEdge)) {
+        audio.currentTime = liveEdge;
+        setCurrentTime(liveEdge);
+      }
+    }
+
+    audio.play().catch((e) => setError(`Playback error: ${e.message}`));
+  };
+
   const handleHistorySelect = (entry: HistoryEntry) => {
     loadStream(entry.url, entry.position);
   };
@@ -338,6 +359,8 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     setHistory([]);
     saveHistory([]);
   };
+
+  const showLiveCta = isLiveStream && !isPlaying;
 
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6">
@@ -395,16 +418,14 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
       <div className="space-y-4">
         <div className="flex items-center justify-center gap-4">
-          {!isLiveStream && (
-            <button
-              onClick={() => seekRelative(-15)}
-              disabled={!isLoaded}
-              className="flex items-center justify-center w-12 h-12 rounded-full hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Back 15 seconds"
-            >
-              <Skip15BackIcon className="w-12 h-12" />
-            </button>
-          )}
+          <button
+            onClick={() => seekRelative(-15)}
+            disabled={!isLoaded || isLiveStream}
+            className="flex items-center justify-center h-12 w-12 rounded-full border border-border bg-card text-muted-foreground shadow-sm transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:border-dashed disabled:bg-muted/40 disabled:text-muted-foreground/70"
+            title={isLiveStream ? "Seeking disabled for live" : "Back 15 seconds"}
+          >
+            <Skip15BackIcon className="w-10 h-10" />
+          </button>
           <button
             onClick={togglePlayPause}
             disabled={!isLoaded}
@@ -416,24 +437,43 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
               <PlayCircleIcon className="w-16 h-16" />
             )}
           </button>
-          {!isLiveStream && (
-            <button
-              onClick={() => seekRelative(30)}
-              disabled={!isLoaded}
-              className="flex items-center justify-center w-12 h-12 rounded-full hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Forward 30 seconds"
-            >
-              <Skip30ForwardIcon className="w-12 h-12" />
-            </button>
-          )}
+          <button
+            onClick={() => seekRelative(30)}
+            disabled={!isLoaded || isLiveStream}
+            className="flex items-center justify-center h-12 w-12 rounded-full border border-border bg-card text-muted-foreground shadow-sm transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:border-dashed disabled:bg-muted/40 disabled:text-muted-foreground/70"
+            title={isLiveStream ? "Seeking disabled for live" : "Forward 30 seconds"}
+          >
+            <Skip30ForwardIcon className="w-10 h-10" />
+          </button>
         </div>
 
         {isLiveStream ? (
-          <div className="flex items-center justify-center py-4">
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white rounded-full text-sm font-medium">
-              <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
-              LIVE
+          <div className="flex items-center gap-3 rounded-lg border border-red-100/80 bg-gradient-to-r from-red-50 to-background px-4 py-3">
+            <div className="relative flex h-3 w-3">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-70" />
+              <span className="relative inline-flex h-3 w-3 rounded-full bg-red-600" />
             </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <span className="rounded-full border border-red-100 bg-white/80 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-red-600 shadow-sm">
+                  Live
+                </span>
+                <span className="text-xs text-muted-foreground">Live stream · seeking disabled</span>
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Stay near the live edge. If you paused or lagged, tap Go live to catch up.
+              </p>
+            </div>
+            {showLiveCta && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={jumpToLiveEdge}
+                className="border-red-200 text-red-700 hover:bg-red-50"
+              >
+                Go live
+              </Button>
+            )}
           </div>
         ) : (
           <div className="space-y-2">
