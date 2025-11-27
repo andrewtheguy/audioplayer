@@ -310,6 +310,16 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   };
 
   const handleHistorySelect = (entry: HistoryEntry) => {
+    // Move selected entry to top immediately
+    setHistory((prev) => {
+      const updatedEntry: HistoryEntry = {
+        ...entry,
+        lastPlayedAt: new Date().toISOString(),
+      };
+      const newHistory = [updatedEntry, ...prev.filter((h) => h.url !== entry.url)];
+      saveHistory(newHistory);
+      return newHistory;
+    });
     loadStream(entry.url, entry.position);
   };
 
