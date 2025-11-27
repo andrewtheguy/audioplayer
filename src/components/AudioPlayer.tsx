@@ -383,9 +383,13 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
           <button
             onClick={togglePlayPause}
             disabled={!isLoaded}
-            className="flex items-center justify-center text-4xl disabled:opacity-50 disabled:cursor-not-allowed hover:scale-110 transition-transform"
+            className="flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed hover:scale-105 transition-transform"
           >
-            {isPlaying ? "⏸️" : "▶️"}
+            {isPlaying ? (
+              <PauseCircleIcon className="w-16 h-16" />
+            ) : (
+              <PlayCircleIcon className="w-16 h-16" />
+            )}
           </button>
           <button
             onClick={() => seekRelative(30)}
@@ -537,6 +541,36 @@ function CheckIcon({ className }: { className?: string }) {
       xmlns="http://www.w3.org/2000/svg"
     >
       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
+
+function PlayCircleIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <circle cx="12" cy="12" r="11" fill="currentColor" />
+      <path
+        d="M9.5 7.5v9l7-4.5-7-4.5z"
+        fill="white"
+      />
+    </svg>
+  );
+}
+
+function PauseCircleIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <circle cx="12" cy="12" r="11" fill="currentColor" />
+      <rect x="8" y="7" width="3" height="10" rx="0.5" fill="white" />
+      <rect x="13" y="7" width="3" height="10" rx="0.5" fill="white" />
     </svg>
   );
 }
