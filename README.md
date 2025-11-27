@@ -1,73 +1,66 @@
-# React + TypeScript + Vite
+# HLS Audio Player
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A web-based audio player with HLS streaming support, built with React, TypeScript, and Tailwind CSS.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **HLS Streaming Support** - Play HLS streams (.m3u8) using hls.js
+- **Playback Controls** - Play/pause, seek forward (+30s), seek backward (-15s)
+- **Progress Bar** - Visual progress with seekable slider, displays time in HH:MM:SS format
+- **Volume Control** - Adjustable volume slider
+- **URL History** - Automatically saves played URLs to localStorage
+  - Stores last played position for each URL
+  - Resume playback from where you left off
+  - Copy URL to clipboard
+  - Delete individual entries or clear all
+  - Collapsible history list
+- **Position Persistence** - Saves playback position every 5 seconds
+- **Now Playing** - Displays currently loaded stream URL
 
-## React Compiler
+## Tech Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- React 19
+- TypeScript
+- Vite
+- Tailwind CSS v4
+- shadcn/ui components
+- hls.js for HLS playback
 
-## Expanding the ESLint configuration
+## Getting Started
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### Install dependencies
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### Run development server
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run dev
 ```
+
+### Build for production
+
+```bash
+npm run build
+```
+
+### Preview production build
+
+```bash
+npm run preview
+```
+
+## Usage
+
+1. Enter an HLS stream URL (.m3u8) in the input field
+2. Click "Load" or press Enter to load the stream
+3. Use the play button to start playback
+4. Use -15s and +30s buttons to seek
+5. Adjust volume with the volume slider
+6. Click on history items to reload and resume from saved position
+
+## Example HLS Streams
+
+You can test with any public HLS audio stream URL ending in `.m3u8`.
