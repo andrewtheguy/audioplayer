@@ -74,16 +74,11 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const [volume, setVolume] = useState(1);
   const [isLoaded, setIsLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
-  const [pendingSeekPosition, setPendingSeekPosition] = useState<number | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>(() => getHistory());
+  const pendingSeekPositionRef = useRef<number | null>(null);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [isLiveStream, setIsLiveStream] = useState(false);
-
-  // Load history on mount
-  useEffect(() => {
-    setHistory(getHistory());
-  }, []);
 
   // Keep ref in sync with state for use in callbacks
   useEffect(() => {
@@ -144,17 +139,6 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     };
   }, [saveCurrentPosition]);
 
-  // Handle pending seek after load
-  useEffect(() => {
-    if (isLoaded && pendingSeekPosition !== null) {
-      const audio = audioRef.current;
-      if (audio) {
-        audio.currentTime = pendingSeekPosition;
-        setCurrentTime(pendingSeekPosition);
-      }
-      setPendingSeekPosition(null);
-    }
-  }, [isLoaded, pendingSeekPosition]);
 
   const loadStream = (streamUrl?: string, seekPosition?: number) => {
     const urlToLoad = streamUrl ?? url;
@@ -176,7 +160,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     setIsLiveStream(false);
 
     if (seekPosition !== undefined) {
-      setPendingSeekPosition(seekPosition);
+      pendingSeekPositionRef.current = seekPosition;
     }
 
     const audio = audioRef.current;
@@ -194,6 +178,14 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       setIsLoaded(true);
       setNowPlaying(urlToLoad);
       setUrl("");
+      // Apply pending seek position
+      if (pendingSeekPositionRef.current !== null) {
+        const seekTo = pendingSeekPositionRef.current;
+        pendingSeekPositionRef.current = null;
+        if (audio) {
+          audio.currentTime = seekTo;
+        }
+      }
     };
 
     if (urlToLoad.includes(".m3u8")) {
@@ -210,7 +202,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
           const isLive = data.details.live === true;
           setIsLiveStream(isLive);
           if (isLive) {
-            setPendingSeekPosition(null); // Don't seek for live streams
+            pendingSeekPositionRef.current = null; // Don't seek for live streams
           }
           // Only mark as loaded after we know the stream type (once)
           if (!hasCalledLoadSuccess) {

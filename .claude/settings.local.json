@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npx shadcn@latest init -d)",
       "Bash(npm install:*)",
-      "Bash(npx shadcn@latest add:*)"
+      "Bash(npx shadcn@latest add:*)",
+      "Bash(npm run lint:*)"
     ],
     "deny": [],
     "ask": []
