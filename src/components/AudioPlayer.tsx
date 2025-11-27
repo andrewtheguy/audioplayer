@@ -76,6 +76,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [pendingSeekPosition, setPendingSeekPosition] = useState<number | null>(null);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
 
   // Load history on mount
   useEffect(() => {
@@ -431,55 +432,63 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       {/* History List */}
       {history.length > 0 && (
         <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-medium">History</label>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleClearHistory}
-              className="text-xs text-muted-foreground hover:text-destructive"
-            >
-              Clear All
-            </Button>
-          </div>
-          <div className="max-h-48 overflow-y-auto space-y-1 border rounded-md p-2">
-            {history.map((entry) => (
-              <div
-                key={entry.url}
-                onClick={() => handleHistorySelect(entry)}
-                className="flex items-center justify-between p-2 rounded hover:bg-accent cursor-pointer group"
-              >
-                <div className="flex-1 min-w-0 mr-2">
-                  <div className="text-sm truncate" title={entry.url}>
-                    {truncateUrl(entry.url)}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {formatDate(entry.lastPlayedAt)} &middot; {formatTime(entry.position)}
-                  </div>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => handleCopyEntry(e, entry.url)}
-                    className={`h-6 w-6 p-0 ${copiedUrl === entry.url ? "opacity-100 text-green-500" : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground"}`}
-                    title={copiedUrl === entry.url ? "Copied!" : "Copy URL"}
+          <button
+            onClick={() => setHistoryExpanded(!historyExpanded)}
+            className="flex items-center gap-2 text-sm font-medium hover:text-foreground/80"
+          >
+            <ChevronIcon className={`w-4 h-4 transition-transform ${historyExpanded ? "rotate-90" : ""}`} />
+            History ({history.length})
+          </button>
+          {historyExpanded && (
+            <>
+              <div className="max-h-48 overflow-y-auto space-y-1 border rounded-md p-2">
+                {history.map((entry) => (
+                  <div
+                    key={entry.url}
+                    onClick={() => handleHistorySelect(entry)}
+                    className="flex items-center justify-between p-2 rounded hover:bg-accent cursor-pointer group"
                   >
-                    {copiedUrl === entry.url ? <CheckIcon className="w-4 h-4" /> : <CopyIcon className="w-4 h-4" />}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => handleDeleteEntry(e, entry.url)}
-                    className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
-                    title="Delete"
-                  >
-                    <XIcon className="w-4 h-4" />
-                  </Button>
-                </div>
+                    <div className="flex-1 min-w-0 mr-2">
+                      <div className="text-sm truncate" title={entry.url}>
+                        {truncateUrl(entry.url)}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {formatDate(entry.lastPlayedAt)} &middot; {formatTime(entry.position)}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => handleCopyEntry(e, entry.url)}
+                        className={`h-6 w-6 p-0 ${copiedUrl === entry.url ? "opacity-100 text-green-500" : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground"}`}
+                        title={copiedUrl === entry.url ? "Copied!" : "Copy URL"}
+                      >
+                        {copiedUrl === entry.url ? <CheckIcon className="w-4 h-4" /> : <CopyIcon className="w-4 h-4" />}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => handleDeleteEntry(e, entry.url)}
+                        className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                        title="Delete"
+                      >
+                        <XIcon className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleClearHistory}
+                className="text-xs text-muted-foreground hover:text-destructive"
+              >
+                Clear All
+              </Button>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -541,6 +550,21 @@ function CheckIcon({ className }: { className?: string }) {
       xmlns="http://www.w3.org/2000/svg"
     >
       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
+
+function ChevronIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
     </svg>
   );
 }
