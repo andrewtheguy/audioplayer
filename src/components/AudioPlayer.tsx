@@ -5,6 +5,7 @@ import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 
 const STORAGE_KEY = "com.audioplayer.history.v1";
+const HISTORY_TIMESTAMP_KEY = "com.audioplayer.history.timestamp";
 const MAX_HISTORY_ENTRIES = 100;
 const SAVE_INTERVAL_MS = 5000;
 
@@ -32,6 +33,7 @@ function getHistory(): HistoryEntry[] {
 function saveHistory(history: HistoryEntry[]): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
+    localStorage.setItem(HISTORY_TIMESTAMP_KEY, Date.now().toString());
   } catch {
     // Storage full or unavailable
   }
@@ -70,6 +72,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const gainNodeRef = useRef<GainNode | null>(null);
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const gainRef = useRef<number>(1);
+  const pausedAtTimestampRef = useRef<number | null>(null);
 
   const [url, setUrl] = useState(initialUrl);
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
@@ -95,6 +98,13 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   useEffect(() => {
     gainRef.current = gain;
   }, [gain]);
+
+  // Clear pause timestamp when playing starts
+  useEffect(() => {
+    if (isPlaying) {
+      pausedAtTimestampRef.current = null;
+    }
+  }, [isPlaying]);
 
   // Setup Web Audio API for gain control
   const setupGainNode = useCallback(() => {
@@ -389,6 +399,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
   const handlePause = () => {
     setIsPlaying(false);
+    pausedAtTimestampRef.current = Date.now();
     saveCurrentPosition();
   };
 
@@ -490,6 +501,40 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     setHistory([]);
     saveHistory([]);
   };
+
+  // Cross-tab sync: reload history when tab becomes visible if it was updated elsewhere
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      // Only check when tab becomes visible and audio is not playing
+      if (document.visibilityState === "visible" && !isPlaying) {
+        const pausedAt = pausedAtTimestampRef.current;
+        if (pausedAt === null) return;
+
+        // Get the localStorage history timestamp
+        const storedTimestamp = localStorage.getItem(HISTORY_TIMESTAMP_KEY);
+        if (!storedTimestamp) return;
+
+        const historyUpdatedAt = parseInt(storedTimestamp, 10);
+
+        // If history was updated after we paused, reload it
+        if (historyUpdatedAt > pausedAt) {
+          const freshHistory = getHistory();
+          setHistory(freshHistory);
+
+          // Load the most recent entry if available (paused state)
+          if (freshHistory.length > 0) {
+            loadFromHistory(freshHistory[0]);
+          }
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying]);
 
   const showLiveCta = isLiveStream && !isPlaying;
 
