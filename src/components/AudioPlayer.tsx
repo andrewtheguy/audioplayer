@@ -256,6 +256,15 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     }
   };
 
+  const seekRelative = (seconds: number) => {
+    const audio = audioRef.current;
+    if (audio) {
+      const newTime = Math.max(0, Math.min(audio.duration || 0, audio.currentTime + seconds));
+      audio.currentTime = newTime;
+      setCurrentTime(newTime);
+    }
+  };
+
   const handleVolumeChange = (value: number[]) => {
     const audio = audioRef.current;
     if (audio) {
@@ -363,18 +372,29 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
       <div className="space-y-4">
         <div className="flex items-center justify-center gap-4">
-          <Button
-            size="lg"
+          <button
+            onClick={() => seekRelative(-15)}
+            disabled={!isLoaded}
+            className="flex items-center justify-center w-12 h-12 rounded-full hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Back 15 seconds"
+          >
+            <Skip15BackIcon className="w-12 h-12" />
+          </button>
+          <button
             onClick={togglePlayPause}
             disabled={!isLoaded}
-            className="w-16 h-16 rounded-full"
+            className="flex items-center justify-center text-4xl disabled:opacity-50 disabled:cursor-not-allowed hover:scale-110 transition-transform"
           >
-            {isPlaying ? (
-              <PauseIcon className="w-6 h-6" />
-            ) : (
-              <PlayIcon className="w-6 h-6" />
-            )}
-          </Button>
+            {isPlaying ? "⏸️" : "▶️"}
+          </button>
+          <button
+            onClick={() => seekRelative(30)}
+            disabled={!isLoaded}
+            className="flex items-center justify-center w-12 h-12 rounded-full hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Forward 30 seconds"
+          >
+            <Skip30ForwardIcon className="w-12 h-12" />
+          </button>
         </div>
 
         <div className="space-y-2">
@@ -462,32 +482,6 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   );
 }
 
-function PlayIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      fill="currentColor"
-      viewBox="0 0 24 24"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path d="M8 5v14l11-7z" />
-    </svg>
-  );
-}
-
-function PauseIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      fill="currentColor"
-      viewBox="0 0 24 24"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-    </svg>
-  );
-}
-
 function VolumeIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -543,6 +537,58 @@ function CheckIcon({ className }: { className?: string }) {
       xmlns="http://www.w3.org/2000/svg"
     >
       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
+
+function Skip15BackIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        fill="currentColor"
+        d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"
+      />
+      <text
+        x="12"
+        y="14"
+        fontSize="8"
+        fontWeight="700"
+        textAnchor="middle"
+        fill="currentColor"
+        dominantBaseline="middle"
+      >
+        15
+      </text>
+    </svg>
+  );
+}
+
+function Skip30ForwardIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        fill="currentColor"
+        d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z"
+      />
+      <text
+        x="12"
+        y="14"
+        fontSize="7"
+        fontWeight="700"
+        textAnchor="middle"
+        fill="currentColor"
+        dominantBaseline="middle"
+      >
+        30
+      </text>
     </svg>
   );
 }
