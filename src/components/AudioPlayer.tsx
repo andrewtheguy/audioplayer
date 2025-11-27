@@ -113,10 +113,10 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     gainNodeRef.current = gainNode;
   }, []);
 
-  // Apply gain value when it changes
+  // Apply gain value: 1 if disabled, gain value if enabled
   useEffect(() => {
-    if (gainEnabled && gainNodeRef.current) {
-      gainNodeRef.current.gain.value = gain;
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = gainEnabled ? gain : 1;
     }
   }, [gain, gainEnabled]);
 
@@ -124,23 +124,9 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const handleGainToggle = useCallback(() => {
     if (!gainEnabled) {
       setupGainNode();
-      // Restore gain from history if available
-      const historyEntry = history.find((h) => h.url === currentUrlRef.current);
-      if (historyEntry?.gain) {
-        setGain(historyEntry.gain);
-        if (gainNodeRef.current) {
-          gainNodeRef.current.gain.value = historyEntry.gain;
-        }
-      }
-    } else {
-      // Reset gain to 1 when disabling
-      if (gainNodeRef.current) {
-        gainNodeRef.current.gain.value = 1;
-      }
-      setGain(1);
     }
     setGainEnabled(!gainEnabled);
-  }, [gainEnabled, history, setupGainNode]);
+  }, [gainEnabled, setupGainNode]);
 
   // Save current position to history (skip for live streams)
   const saveCurrentPosition = useCallback(() => {
@@ -213,12 +199,9 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     setCurrentTime(0);
     setDuration(0);
     setIsLiveStream(false);
-    // Reset gain state when loading (user must re-enable manually)
+    // Reset gain enabled (user must re-enable manually), but load saved gain value
     setGainEnabled(false);
-    setGain(1);
-    if (gainNodeRef.current) {
-      gainNodeRef.current.gain.value = 1;
-    }
+    setGain(entry.gain ?? 1);
 
     // Set pending seek position from history entry
     pendingSeekPositionRef.current = entry.position;
@@ -313,9 +296,6 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     setIsLiveStream(false);
     setGainEnabled(false);
     setGain(1);
-    if (gainNodeRef.current) {
-      gainNodeRef.current.gain.value = 1;
-    }
     pendingSeekPositionRef.current = null;
 
     const audio = audioRef.current;
