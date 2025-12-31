@@ -7,6 +7,12 @@ export interface NostrKeys {
   publicKey: string;
 }
 
+// Fixed salt for all users - intentional for deterministic key derivation.
+// The same PIN must always produce the same Nostr keypair so users can
+// recover their data on any device without storing anything locally.
+// The salt provides domain separation (same PIN in different apps = different keys).
+// Note: This is separate from the IV/nonce used in NIP-44 encryption, which is
+// random for each encryption operation (providing semantic security).
 const SALT = "audioplayer-pin-nostr-v1";
 const ITERATIONS = 100000;
 
