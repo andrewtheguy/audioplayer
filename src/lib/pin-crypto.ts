@@ -15,11 +15,30 @@ export interface NostrKeys {
 // random for each encryption operation (providing semantic security).
 const SALT = "audioplayer-pin-nostr-v1";
 const ITERATIONS = 100000;
+const MIN_PIN_LENGTH = 8;
+
+/**
+ * Validate PIN meets minimum complexity requirements
+ */
+function validatePin(pin: string): void {
+  if (pin.length < MIN_PIN_LENGTH) {
+    throw new Error(`PIN must be at least ${MIN_PIN_LENGTH} characters`);
+  }
+  if (!/\d/.test(pin)) {
+    throw new Error("PIN must contain at least one number");
+  }
+  if (!/[a-zA-Z]/.test(pin)) {
+    throw new Error("PIN must contain at least one letter");
+  }
+}
 
 /**
  * Derive Nostr secp256k1 keypair from PIN using PBKDF2
+ * Validates PIN strength and ensures derived key is valid for secp256k1
  */
 export async function deriveNostrKeysFromPin(pin: string): Promise<NostrKeys> {
+  validatePin(pin);
+
   const encoder = new TextEncoder();
   const pinBytes = encoder.encode(pin);
   const saltBytes = encoder.encode(SALT);
@@ -44,7 +63,18 @@ export async function deriveNostrKeysFromPin(pin: string): Promise<NostrKeys> {
   );
 
   const privateKey = new Uint8Array(derivedBits);
-  const publicKey = getPublicKey(privateKey);
+
+  // Validate the derived key is a valid secp256k1 private key
+  // by attempting to derive the public key (will throw if invalid)
+  let publicKey: string;
+  try {
+    publicKey = getPublicKey(privateKey);
+  } catch {
+    // Extremely rare: derived bytes outside secp256k1 curve order
+    throw new Error(
+      "Derived key is invalid for secp256k1. Please use a different PIN."
+    );
+  }
 
   return { privateKey, publicKey };
 }
@@ -68,14 +98,67 @@ export function encryptHistory(
 }
 
 /**
+ * Validate that a value is a valid HistoryEntry
+ */
+function isValidHistoryEntry(value: unknown): value is HistoryEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.url === "string" &&
+    typeof entry.lastPlayedAt === "string" &&
+    typeof entry.position === "number" &&
+    (entry.gain === undefined || typeof entry.gain === "number")
+  );
+}
+
+/**
+ * Validate that a parsed value is an array of valid HistoryEntry objects
+ */
+function validateHistoryArray(data: unknown): HistoryEntry[] {
+  if (!Array.isArray(data)) {
+    throw new Error("Decrypted data is not an array");
+  }
+
+  for (let i = 0; i < data.length; i++) {
+    if (!isValidHistoryEntry(data[i])) {
+      throw new Error(`Invalid history entry at index ${i}`);
+    }
+  }
+
+  return data as HistoryEntry[];
+}
+
+/**
  * Decrypt history data using NIP-44
+ * Validates decryption, JSON parsing, and data structure
  */
 export function decryptHistory(
   ciphertext: string,
   senderPublicKey: string,
   recipientPrivateKey: Uint8Array
 ): HistoryEntry[] {
-  const conversationKey = getConversationKey(recipientPrivateKey, senderPublicKey);
-  const plaintext = decrypt(ciphertext, conversationKey);
-  return JSON.parse(plaintext) as HistoryEntry[];
+  let plaintext: string;
+  try {
+    const conversationKey = getConversationKey(recipientPrivateKey, senderPublicKey);
+    plaintext = decrypt(ciphertext, conversationKey);
+  } catch (err) {
+    throw new Error(
+      `Decryption failed: ${err instanceof Error ? err.message : "Unknown error"}. Wrong PIN?`
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(plaintext);
+  } catch {
+    throw new Error("Decrypted data is not valid JSON. Data may be corrupted.");
+  }
+
+  try {
+    return validateHistoryArray(parsed);
+  } catch (err) {
+    throw new Error(
+      `Invalid history data structure: ${err instanceof Error ? err.message : "Unknown error"}`
+    );
+  }
 }
