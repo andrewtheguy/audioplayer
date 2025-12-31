@@ -16,15 +16,31 @@ interface NostrSyncPanelProps {
 
 type SyncStatus = "idle" | "saving" | "loading" | "success" | "error";
 
+const MIN_PIN_LENGTH = 8;
+
+function validatePin(pin: string): string | null {
+  if (pin.length < MIN_PIN_LENGTH) {
+    return `PIN must be at least ${MIN_PIN_LENGTH} characters`;
+  }
+  if (!/\d/.test(pin)) {
+    return "PIN must contain at least one number";
+  }
+  if (!/[a-zA-Z]/.test(pin)) {
+    return "PIN must contain at least one letter";
+  }
+  return null;
+}
+
 export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps) {
   const [pin, setPin] = useState("");
   const [status, setStatus] = useState<SyncStatus>("idle");
   const [message, setMessage] = useState<string | null>(null);
 
   const handleSave = async () => {
-    if (pin.length < 4) {
+    const error = validatePin(pin);
+    if (error) {
       setStatus("error");
-      setMessage("PIN must be at least 4 digits");
+      setMessage(error);
       return;
     }
 
@@ -43,9 +59,10 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
   };
 
   const handleLoad = async () => {
-    if (pin.length < 4) {
+    const error = validatePin(pin);
+    if (error) {
       setStatus("error");
-      setMessage("PIN must be at least 4 digits");
+      setMessage(error);
       return;
     }
 
@@ -86,15 +103,16 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
       <div className="text-xs font-medium text-muted-foreground">
         Nostr Sync
       </div>
+      <div className="text-xs text-muted-foreground">
+        Use a password manager to generate and store your PIN.
+      </div>
       <div className="flex items-center gap-2">
         <Input
           type="password"
-          inputMode="numeric"
-          pattern="[0-9]*"
-          placeholder="PIN (4+ digits)"
+          placeholder="PIN (8+ chars, letters & numbers)"
           value={pin}
-          onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
-          className="w-28 h-7 text-xs"
+          onChange={(e) => setPin(e.target.value)}
+          className="flex-1 h-7 text-xs"
           disabled={isLoading}
         />
         <Button
