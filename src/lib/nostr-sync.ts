@@ -16,7 +16,36 @@ const D_TAG = "audioplayer-history";
 const pool = new SimplePool();
 
 /**
- * Save encrypted history to Nostr relays
+ * Close all relay connections to avoid resource leaks.
+ * Call this during application shutdown or cleanup.
+ */
+export function closePool(): void {
+  pool.close(RELAYS);
+}
+
+// Register cleanup on page unload (browser environment)
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", closePool);
+}
+
+/**
+ * Validate the encrypted payload structure from a Nostr event
+ */
+function isValidPayload(
+  value: unknown
+): value is { v: number; ephemeralPubKey: string; ciphertext: string } {
+  if (typeof value !== "object" || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.v === "number" &&
+    typeof obj.ephemeralPubKey === "string" &&
+    typeof obj.ciphertext === "string"
+  );
+}
+
+/**
+ * Save encrypted history to Nostr relays.
+ * Throws descriptive error if all relays fail.
  */
 export async function saveHistoryToNostr(
   history: HistoryEntry[],
@@ -44,7 +73,20 @@ export async function saveHistoryToNostr(
     userPrivateKey
   );
 
-  await Promise.any(pool.publish(RELAYS, event));
+  try {
+    await Promise.any(pool.publish(RELAYS, event));
+  } catch (err) {
+    // Promise.any throws AggregateError when all promises reject
+    if (err instanceof AggregateError) {
+      const reasons = err.errors
+        .map((e) => (e instanceof Error ? e.message : String(e)))
+        .join("; ");
+      throw new Error(`Failed to publish to any relay: ${reasons}`);
+    }
+    throw new Error(
+      `Failed to save to Nostr: ${err instanceof Error ? err.message : "Unknown error"}`
+    );
+  }
 }
 
 /**
@@ -68,15 +110,22 @@ export async function loadHistoryFromNostr(
   // Get most recent event
   const latest = events.sort((a, b) => b.created_at - a.created_at)[0];
 
+  // Parse and validate payload structure
+  let payload: unknown;
   try {
-    const payload = JSON.parse(latest.content);
-    const { ephemeralPubKey, ciphertext } = payload;
-
-    return decryptHistory(ciphertext, ephemeralPubKey, userPrivateKey);
-  } catch (err) {
-    console.error("Failed to decrypt history:", err);
-    throw new Error("Failed to decrypt history. Wrong PIN?");
+    payload = JSON.parse(latest.content);
+  } catch {
+    throw new Error("Event content is not valid JSON. Data may be corrupted.");
   }
+
+  if (!isValidPayload(payload)) {
+    throw new Error(
+      "Invalid payload structure: missing or invalid ephemeralPubKey/ciphertext fields"
+    );
+  }
+
+  // Decrypt with validated payload
+  return decryptHistory(payload.ciphertext, payload.ephemeralPubKey, userPrivateKey);
 }
 
 /**
