@@ -17,6 +17,38 @@ interface NostrSyncPanelProps {
 type SyncStatus = "idle" | "saving" | "loading" | "success" | "error";
 type ViewState = "input" | "generated" | "copied";
 
+interface LastOperation {
+  type: "saved" | "loaded";
+  fingerprint: string;
+  timestamp: string;
+}
+
+/**
+ * Generate a fingerprint from PIN using SHA256 hash prefix.
+ * Returns first 8 hex characters formatted as xxxx-xxxx.
+ */
+async function getPinFingerprint(pin: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(pin);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+  return `${hashHex.slice(0, 4)}-${hashHex.slice(4, 8)}`;
+}
+
+/**
+ * Format timestamp for display with date and time
+ */
+function formatTimestamp(date: Date): string {
+  return date.toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 const OPERATION_TIMEOUT_MS = 30000; // 30 seconds
 
 class TimeoutError extends Error {
@@ -53,6 +85,7 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
   const [viewState, setViewState] = useState<ViewState>("input");
   const [status, setStatus] = useState<SyncStatus>("idle");
   const [message, setMessage] = useState<string | null>(null);
+  const [lastOperation, setLastOperation] = useState<LastOperation | null>(null);
 
   const handleGenerate = () => {
     const newPin = generatePin();
@@ -96,7 +129,13 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
         saveHistoryToNostr(history, keys.privateKey, keys.publicKey),
         OPERATION_TIMEOUT_MS
       );
+      const fingerprint = await getPinFingerprint(pin);
       setPin("");
+      setLastOperation({
+        type: "saved",
+        fingerprint,
+        timestamp: formatTimestamp(new Date()),
+      });
       setStatus("success");
       setMessage(`Saved ${history.length} entries`);
     } catch (err) {
@@ -129,7 +168,13 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
         OPERATION_TIMEOUT_MS
       );
 
+      const fingerprint = await getPinFingerprint(pin);
       setPin("");
+      setLastOperation({
+        type: "loaded",
+        fingerprint,
+        timestamp: formatTimestamp(new Date()),
+      });
       if (cloudHistory) {
         const result = mergeHistory(history, cloudHistory);
         onHistoryLoaded(result.merged);
@@ -244,6 +289,11 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
           }`}
         >
           {message}
+          {status === "success" && lastOperation && (
+            <span className="block mt-1 opacity-75">
+              {lastOperation.type === "saved" ? "Saved" : "Loaded"} with PIN w/fingerprint <code className="text-sky-600 dark:text-sky-400 font-mono">{lastOperation.fingerprint}</code> at {lastOperation.timestamp}
+            </span>
+          )}
         </div>
       )}
     </div>
