@@ -30,16 +30,20 @@ class TimeoutError extends Error {
  * Wrap a promise with a timeout. Rejects with TimeoutError if not resolved in time.
  */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout>;
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => {
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
       reject(new TimeoutError(`Operation timed out after ${ms / 1000}s`));
     }, ms);
-  });
 
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    clearTimeout(timeoutId);
+    promise
+      .then((result) => {
+        clearTimeout(timeoutId);
+        resolve(result);
+      })
+      .catch((err) => {
+        clearTimeout(timeoutId);
+        reject(err);
+      });
   });
 }
 
