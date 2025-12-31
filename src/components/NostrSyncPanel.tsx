@@ -96,6 +96,7 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
         saveHistoryToNostr(history, keys.privateKey, keys.publicKey),
         OPERATION_TIMEOUT_MS
       );
+      setPin("");
       setStatus("success");
       setMessage(`Saved ${history.length} entries`);
     } catch (err) {
@@ -128,6 +129,7 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
         OPERATION_TIMEOUT_MS
       );
 
+      setPin("");
       if (cloudHistory) {
         const result = mergeHistory(history, cloudHistory);
         onHistoryLoaded(result.merged);

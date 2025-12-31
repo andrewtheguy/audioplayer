@@ -37,16 +37,29 @@ function computeChecksum(data: string): string {
 }
 
 /**
+ * Generate a uniform random index into ALPHANUMERIC (0-61) using rejection sampling.
+ * Rejects bytes >= 248 (62 * 4) to avoid modulo bias.
+ */
+function getUniformRandomIndex(): number {
+  const buffer = new Uint8Array(1);
+  while (true) {
+    crypto.getRandomValues(buffer);
+    if (buffer[0] < 248) {
+      return buffer[0] % 62;
+    }
+    // Reject and retry if >= 248
+  }
+}
+
+/**
  * Generate a cryptographically random PIN.
  * Format: 'a' (version) + 12 random alphanumeric chars + 1 checksum char = 14 chars total
+ * Uses rejection sampling to ensure uniform distribution of characters.
  */
 export function generatePin(): string {
-  const randomBytes = new Uint8Array(RANDOM_CHARS_LENGTH);
-  crypto.getRandomValues(randomBytes);
-
   let randomPart = "";
   for (let i = 0; i < RANDOM_CHARS_LENGTH; i++) {
-    randomPart += ALPHANUMERIC[randomBytes[i] % 62];
+    randomPart += ALPHANUMERIC[getUniformRandomIndex()];
   }
 
   const dataWithoutChecksum = PIN_VERSION + randomPart;
