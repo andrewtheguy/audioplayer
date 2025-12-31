@@ -21,45 +21,48 @@ const PIN_LENGTH = 14;
 const PIN_VERSION = "a"; // Version 1
 const RANDOM_CHARS_LENGTH = 12;
 
-// Alphanumeric character set for PIN generation and checksum
-const ALPHANUMERIC = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+// Printable non-space ASCII characters (33-126) for PIN generation
+// 94 characters total: !"#$%&'()*+,-./0-9:;<=>?@A-Z[\]^_`a-z{|}~
+const PRINTABLE_CHARS = Array.from({ length: 94 }, (_, i) =>
+  String.fromCharCode(33 + i)
+).join("");
 
 /**
  * Compute checksum character from data string.
- * Sum of ASCII codes mod 62, mapped to alphanumeric.
+ * Sum of ASCII codes mod 94, mapped to printable chars.
  */
 function computeChecksum(data: string): string {
   let sum = 0;
   for (let i = 0; i < data.length; i++) {
     sum += data.charCodeAt(i);
   }
-  return ALPHANUMERIC[sum % 62];
+  return PRINTABLE_CHARS[sum % 94];
 }
 
 /**
- * Generate a uniform random index into ALPHANUMERIC (0-61) using rejection sampling.
- * Rejects bytes >= 248 (62 * 4) to avoid modulo bias.
+ * Generate a uniform random index into PRINTABLE_CHARS (0-93) using rejection sampling.
+ * Rejects bytes >= 188 (94 * 2) to avoid modulo bias.
  */
 function getUniformRandomIndex(): number {
   const buffer = new Uint8Array(1);
   while (true) {
     crypto.getRandomValues(buffer);
-    if (buffer[0] < 248) {
-      return buffer[0] % 62;
+    if (buffer[0] < 188) {
+      return buffer[0] % 94;
     }
-    // Reject and retry if >= 248
+    // Reject and retry if >= 188
   }
 }
 
 /**
  * Generate a cryptographically random PIN.
- * Format: 'a' (version) + 12 random alphanumeric chars + 1 checksum char = 14 chars total
+ * Format: 'a' (version) + 12 random printable chars + 1 checksum char = 14 chars total
  * Uses rejection sampling to ensure uniform distribution of characters.
  */
 export function generatePin(): string {
   let randomPart = "";
   for (let i = 0; i < RANDOM_CHARS_LENGTH; i++) {
-    randomPart += ALPHANUMERIC[getUniformRandomIndex()];
+    randomPart += PRINTABLE_CHARS[getUniformRandomIndex()];
   }
 
   const dataWithoutChecksum = PIN_VERSION + randomPart;
