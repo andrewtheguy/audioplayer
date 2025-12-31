@@ -15,29 +15,73 @@ export interface NostrKeys {
 // random for each encryption operation (providing semantic security).
 const SALT = "audioplayer-pin-nostr-v1";
 const ITERATIONS = 100000;
-const MIN_PIN_LENGTH = 8;
+
+// PIN format: version prefix (1 char) + random data (12 chars) + checksum (1 char) = 14 chars
+const PIN_LENGTH = 14;
+const PIN_VERSION = "a"; // Version 1
+const RANDOM_CHARS_LENGTH = 12;
+
+// Alphanumeric character set for PIN generation and checksum
+const ALPHANUMERIC = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 /**
- * Validate PIN meets minimum complexity requirements
+ * Compute checksum character from data string.
+ * Sum of ASCII codes mod 62, mapped to alphanumeric.
  */
-function validatePin(pin: string): void {
-  if (pin.length < MIN_PIN_LENGTH) {
-    throw new Error(`PIN must be at least ${MIN_PIN_LENGTH} characters`);
+function computeChecksum(data: string): string {
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) {
+    sum += data.charCodeAt(i);
   }
-  if (!/\d/.test(pin)) {
-    throw new Error("PIN must contain at least one number");
+  return ALPHANUMERIC[sum % 62];
+}
+
+/**
+ * Generate a cryptographically random PIN.
+ * Format: 'a' (version) + 12 random alphanumeric chars + 1 checksum char = 14 chars total
+ */
+export function generatePin(): string {
+  const randomBytes = new Uint8Array(RANDOM_CHARS_LENGTH);
+  crypto.getRandomValues(randomBytes);
+
+  let randomPart = "";
+  for (let i = 0; i < RANDOM_CHARS_LENGTH; i++) {
+    randomPart += ALPHANUMERIC[randomBytes[i] % 62];
   }
-  if (!/[a-zA-Z]/.test(pin)) {
-    throw new Error("PIN must contain at least one letter");
+
+  const dataWithoutChecksum = PIN_VERSION + randomPart;
+  const checksum = computeChecksum(dataWithoutChecksum);
+
+  return dataWithoutChecksum + checksum;
+}
+
+/**
+ * Validate PIN format: version prefix, length, and checksum
+ */
+function validatePinFormat(pin: string): void {
+  if (pin.length !== PIN_LENGTH) {
+    throw new Error(`Invalid PIN: must be exactly ${PIN_LENGTH} characters`);
+  }
+
+  if (!pin.startsWith(PIN_VERSION)) {
+    throw new Error(`Invalid PIN: unrecognized version`);
+  }
+
+  const dataWithoutChecksum = pin.slice(0, -1);
+  const providedChecksum = pin.slice(-1);
+  const expectedChecksum = computeChecksum(dataWithoutChecksum);
+
+  if (providedChecksum !== expectedChecksum) {
+    throw new Error("Invalid PIN: checksum mismatch (typo or corrupted)");
   }
 }
 
 /**
  * Derive Nostr secp256k1 keypair from PIN using PBKDF2
- * Validates PIN strength and ensures derived key is valid for secp256k1
+ * Validates PIN format and ensures derived key is valid for secp256k1
  */
 export async function deriveNostrKeysFromPin(pin: string): Promise<NostrKeys> {
-  validatePin(pin);
+  validatePinFormat(pin);
 
   const encoder = new TextEncoder();
   const pinBytes = encoder.encode(pin);

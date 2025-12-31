@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { deriveNostrKeysFromPin } from "@/lib/pin-crypto";
+import { deriveNostrKeysFromPin, generatePin } from "@/lib/pin-crypto";
 import {
   saveHistoryToNostr,
   loadHistoryFromNostr,
@@ -15,8 +15,8 @@ interface NostrSyncPanelProps {
 }
 
 type SyncStatus = "idle" | "saving" | "loading" | "success" | "error";
+type ViewState = "input" | "generated" | "copied";
 
-const MIN_PIN_LENGTH = 8;
 const OPERATION_TIMEOUT_MS = 30000; // 30 seconds
 
 class TimeoutError extends Error {
@@ -47,29 +47,40 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-function validatePin(pin: string): string | null {
-  if (pin.length < MIN_PIN_LENGTH) {
-    return `PIN must be at least ${MIN_PIN_LENGTH} characters`;
-  }
-  if (!/\d/.test(pin)) {
-    return "PIN must contain at least one number";
-  }
-  if (!/[a-zA-Z]/.test(pin)) {
-    return "PIN must contain at least one letter";
-  }
-  return null;
-}
-
 export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps) {
   const [pin, setPin] = useState("");
+  const [generatedPin, setGeneratedPin] = useState<string | null>(null);
+  const [viewState, setViewState] = useState<ViewState>("input");
   const [status, setStatus] = useState<SyncStatus>("idle");
   const [message, setMessage] = useState<string | null>(null);
 
-  const handleSave = async () => {
-    const error = validatePin(pin);
-    if (error) {
+  const handleGenerate = () => {
+    const newPin = generatePin();
+    setGeneratedPin(newPin);
+    setViewState("generated");
+    setMessage(null);
+    setStatus("idle");
+  };
+
+  const handleCopy = async () => {
+    if (!generatedPin) return;
+
+    try {
+      await navigator.clipboard.writeText(generatedPin);
+      setGeneratedPin(null);
+      setViewState("copied");
+      setMessage("PIN copied! Paste it below to sync.");
+      setStatus("success");
+    } catch {
+      setMessage("Failed to copy to clipboard");
       setStatus("error");
-      setMessage(error);
+    }
+  };
+
+  const handleSave = async () => {
+    if (!pin) {
+      setStatus("error");
+      setMessage("Please enter your PIN");
       return;
     }
 
@@ -98,10 +109,9 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
   };
 
   const handleLoad = async () => {
-    const error = validatePin(pin);
-    if (error) {
+    if (!pin) {
       setStatus("error");
-      setMessage(error);
+      setMessage("Please enter your PIN");
       return;
     }
 
@@ -148,37 +158,83 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
       <div className="text-xs font-medium text-muted-foreground">
         Nostr Sync
       </div>
-      <div className="text-xs text-muted-foreground">
-        Use a password manager to generate and store your PIN.
-      </div>
-      <div className="flex items-center gap-2">
-        <Input
-          type="password"
-          placeholder="PIN (8+ chars, letters & numbers)"
-          value={pin}
-          onChange={(e) => setPin(e.target.value)}
-          className="flex-1 h-7 text-xs"
-          disabled={isLoading}
-        />
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={handleSave}
-          disabled={isLoading}
-          className="h-7 text-xs"
-        >
-          {status === "saving" ? "..." : "Save"}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={handleLoad}
-          disabled={isLoading}
-          className="h-7 text-xs"
-        >
-          {status === "loading" ? "..." : "Load"}
-        </Button>
-      </div>
+
+      {/* Generated PIN display */}
+      {viewState === "generated" && generatedPin && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 p-2 bg-muted rounded-md">
+            <code className="flex-1 text-xs font-mono select-all">
+              {generatedPin}
+            </code>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleCopy}
+              className="h-6 text-xs"
+            >
+              Copy
+            </Button>
+          </div>
+          <div className="text-xs text-amber-600 dark:text-amber-500">
+            Save this PIN in your password manager. It cannot be recovered.
+          </div>
+        </div>
+      )}
+
+      {/* Input state or after copy */}
+      {(viewState === "input" || viewState === "copied") && (
+        <>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleGenerate}
+            disabled={isLoading}
+            className="h-7 text-xs"
+          >
+            Generate New PIN
+          </Button>
+
+          <div className="text-xs text-muted-foreground">
+            Or paste existing PIN:
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Input
+              type="password"
+              placeholder="Paste your PIN"
+              value={pin}
+              onChange={(e) => {
+                setPin(e.target.value);
+                if (viewState === "copied") {
+                  setViewState("input");
+                  setMessage(null);
+                }
+              }}
+              className="flex-1 h-7 text-xs font-mono"
+              disabled={isLoading}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleSave}
+              disabled={isLoading || !pin}
+              className="h-7 text-xs"
+            >
+              {status === "saving" ? "..." : "Save"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleLoad}
+              disabled={isLoading || !pin}
+              className="h-7 text-xs"
+            >
+              {status === "loading" ? "..." : "Load"}
+            </Button>
+          </div>
+        </>
+      )}
+
       {message && (
         <div
           className={`text-xs ${
