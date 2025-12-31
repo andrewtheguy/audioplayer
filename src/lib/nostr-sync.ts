@@ -128,6 +128,12 @@ export async function loadHistoryFromNostr(
   return decryptHistory(payload.ciphertext, payload.ephemeralPubKey, userPrivateKey);
 }
 
+export interface MergeResult {
+  merged: HistoryEntry[];
+  addedFromCloud: number;
+  duplicatesSkipped: number;
+}
+
 /**
  * Merge cloud history into local history
  * Keep all local entries, only add URLs from cloud that don't exist locally
@@ -135,9 +141,14 @@ export async function loadHistoryFromNostr(
 export function mergeHistory(
   local: HistoryEntry[],
   cloud: HistoryEntry[]
-): HistoryEntry[] {
+): MergeResult {
   const localUrls = new Set(local.map((e) => e.url));
   const newFromCloud = cloud.filter((e) => !localUrls.has(e.url));
+  const duplicatesSkipped = cloud.length - newFromCloud.length;
 
-  return [...local, ...newFromCloud];
+  return {
+    merged: [...local, ...newFromCloud],
+    addedFromCloud: newFromCloud.length,
+    duplicatesSkipped,
+  };
 }

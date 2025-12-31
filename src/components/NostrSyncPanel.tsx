@@ -17,6 +17,31 @@ interface NostrSyncPanelProps {
 type SyncStatus = "idle" | "saving" | "loading" | "success" | "error";
 
 const MIN_PIN_LENGTH = 8;
+const OPERATION_TIMEOUT_MS = 30000; // 30 seconds
+
+class TimeoutError extends Error {
+  constructor(message = "Operation timed out") {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
+
+/**
+ * Wrap a promise with a timeout. Rejects with TimeoutError if not resolved in time.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout>;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new TimeoutError(`Operation timed out after ${ms / 1000}s`));
+    }, ms);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timeoutId);
+  });
+}
 
 function validatePin(pin: string): string | null {
   if (pin.length < MIN_PIN_LENGTH) {
@@ -48,13 +73,23 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
     setMessage(null);
 
     try {
-      const keys = await deriveNostrKeysFromPin(pin);
-      await saveHistoryToNostr(history, keys.privateKey, keys.publicKey);
+      const keys = await withTimeout(
+        deriveNostrKeysFromPin(pin),
+        OPERATION_TIMEOUT_MS
+      );
+      await withTimeout(
+        saveHistoryToNostr(history, keys.privateKey, keys.publicKey),
+        OPERATION_TIMEOUT_MS
+      );
       setStatus("success");
       setMessage(`Saved ${history.length} entries`);
     } catch (err) {
       setStatus("error");
-      setMessage(err instanceof Error ? err.message : "Failed to save");
+      if (err instanceof TimeoutError) {
+        setMessage("Save timed out. Check your connection and try again.");
+      } else {
+        setMessage(err instanceof Error ? err.message : "Failed to save");
+      }
     }
   };
 
@@ -70,20 +105,22 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
     setMessage(null);
 
     try {
-      const keys = await deriveNostrKeysFromPin(pin);
-      const cloudHistory = await loadHistoryFromNostr(
-        keys.privateKey,
-        keys.publicKey
+      const keys = await withTimeout(
+        deriveNostrKeysFromPin(pin),
+        OPERATION_TIMEOUT_MS
+      );
+      const cloudHistory = await withTimeout(
+        loadHistoryFromNostr(keys.privateKey, keys.publicKey),
+        OPERATION_TIMEOUT_MS
       );
 
       if (cloudHistory) {
-        const merged = mergeHistory(history, cloudHistory);
-        const added = merged.length - history.length;
-        onHistoryLoaded(merged);
+        const result = mergeHistory(history, cloudHistory);
+        onHistoryLoaded(result.merged);
         setStatus("success");
         setMessage(
-          added > 0
-            ? `Added ${added} entries from cloud`
+          result.addedFromCloud > 0
+            ? `Added ${result.addedFromCloud} entries from cloud`
             : "History is up to date"
         );
       } else {
@@ -92,7 +129,11 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
       }
     } catch (err) {
       setStatus("error");
-      setMessage(err instanceof Error ? err.message : "Failed to load");
+      if (err instanceof TimeoutError) {
+        setMessage("Load timed out. Check your connection and try again.");
+      } else {
+        setMessage(err instanceof Error ? err.message : "Failed to load");
+      }
     }
   };
 
