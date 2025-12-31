@@ -3,7 +3,7 @@ import { SimplePool } from "nostr-tools/pool";
 import type { HistoryEntry } from "./history";
 import { encryptHistory, decryptHistory } from "./pin-crypto";
 
-const RELAYS = [
+export const RELAYS = [
   "wss://relay.damus.io",
   "wss://relay.primal.net",
   "wss://relay.nostr.band",

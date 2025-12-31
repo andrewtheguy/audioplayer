@@ -6,6 +6,7 @@ import {
   saveHistoryToNostr,
   loadHistoryFromNostr,
   mergeHistory,
+  RELAYS,
 } from "@/lib/nostr-sync";
 import type { HistoryEntry } from "@/lib/history";
 
@@ -86,6 +87,7 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
   const [status, setStatus] = useState<SyncStatus>("idle");
   const [message, setMessage] = useState<string | null>(null);
   const [lastOperation, setLastOperation] = useState<LastOperation | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
 
   const handleGenerate = () => {
     const newPin = generatePin();
@@ -296,6 +298,32 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
           )}
         </div>
       )}
+
+      {/* Collapsible details panel */}
+      <div className="pt-1">
+        <button
+          type="button"
+          onClick={() => setShowDetails(!showDetails)}
+          className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+        >
+          <span className="inline-block w-3 text-center">
+            {showDetails ? "▼" : "▶"}
+          </span>
+          Details
+        </button>
+        {showDetails && (
+          <div className="mt-2 pl-4 text-xs text-muted-foreground space-y-1">
+            <div className="font-medium">Relays:</div>
+            <ul className="list-disc pl-4 space-y-0.5">
+              {RELAYS.map((relay) => (
+                <li key={relay} className="font-mono text-[10px]">
+                  {relay}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
