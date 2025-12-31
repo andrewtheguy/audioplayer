@@ -56,7 +56,7 @@ function getUniformRandomIndex(): number {
 
 /**
  * Generate a cryptographically random PIN.
- * Format: 'a' (version) + 12 random printable chars + 1 checksum char = 14 chars total
+ * Format: 'a' (version) + 14 random printable chars + 1 checksum char = 16 chars total
  * Uses rejection sampling to ensure uniform distribution of characters.
  */
 export function generatePin(): string {
