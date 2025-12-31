@@ -5,7 +5,11 @@
       "Bash(npm install:*)",
       "Bash(npx shadcn@latest add:*)",
       "Bash(npm run lint:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(xargs ls:*)",
+      "Bash(cat:*)",
+      "Bash(git -C /Users/it3/codes/andrew/audioplayer show history_encrypt:src/lib/nostr.ts)",
+      "Bash(git -C /Users/it3/codes/andrew/audioplayer diff main history_encrypt --name-only)"
     ],
     "deny": [],
     "ask": []
