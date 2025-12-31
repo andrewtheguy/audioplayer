@@ -3,40 +3,19 @@ import Hls from "hls.js";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
+import { NostrSyncPanel } from "./NostrSyncPanel";
+import {
+  HISTORY_TIMESTAMP_KEY,
+  MAX_HISTORY_ENTRIES,
+  getHistory,
+  saveHistory,
+  type HistoryEntry,
+} from "@/lib/history";
 
-const STORAGE_KEY = "com.audioplayer.history.v1";
-const HISTORY_TIMESTAMP_KEY = "com.audioplayer.history.timestamp";
-const MAX_HISTORY_ENTRIES = 100;
 const SAVE_INTERVAL_MS = 5000;
-
-interface HistoryEntry {
-  url: string;
-  lastPlayedAt: string;
-  position: number;
-  gain?: number; // Gain multiplier (1 = 100%, 2 = 200%, etc.)
-}
 
 interface AudioPlayerProps {
   initialUrl?: string;
-}
-
-// localStorage utility functions
-function getHistory(): HistoryEntry[] {
-  try {
-    const data = localStorage.getItem(STORAGE_KEY);
-    return data ? JSON.parse(data) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveHistory(history: HistoryEntry[]): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
-    localStorage.setItem(HISTORY_TIMESTAMP_KEY, Date.now().toString());
-  } catch {
-    // Storage full or unavailable
-  }
 }
 
 function formatTime(seconds: number): string {
@@ -712,67 +691,76 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       </div>
 
       {/* History List */}
-      {history.length > 0 && (
-        <div className="space-y-2">
-          <button
-            onClick={() => setHistoryExpanded(!historyExpanded)}
-            className="flex items-center gap-2 text-sm font-medium hover:text-foreground/80"
-          >
-            <ChevronIcon className={`w-4 h-4 transition-transform ${historyExpanded ? "rotate-90" : ""}`} />
-            History ({history.length})
-          </button>
-          {historyExpanded && (
-            <>
-              <div className="max-h-48 overflow-y-auto space-y-1 border rounded-md p-2">
-                {history.map((entry) => (
-                  <div
-                    key={entry.url}
-                    onClick={() => handleHistorySelect(entry)}
-                    className="flex items-center justify-between p-2 rounded hover:bg-accent cursor-pointer group"
-                  >
-                    <div className="flex-1 min-w-0 mr-2">
-                      <div className="text-sm truncate" title={entry.url}>
-                        {truncateUrl(entry.url)}
+      <div className="space-y-2">
+        {history.length > 0 && (
+          <>
+            <button
+              onClick={() => setHistoryExpanded(!historyExpanded)}
+              className="flex items-center gap-2 text-sm font-medium hover:text-foreground/80"
+            >
+              <ChevronIcon className={`w-4 h-4 transition-transform ${historyExpanded ? "rotate-90" : ""}`} />
+              History ({history.length})
+            </button>
+            {historyExpanded && (
+              <>
+                <div className="max-h-48 overflow-y-auto space-y-1 border rounded-md p-2">
+                  {history.map((entry) => (
+                    <div
+                      key={entry.url}
+                      onClick={() => handleHistorySelect(entry)}
+                      className="flex items-center justify-between p-2 rounded hover:bg-accent cursor-pointer group"
+                    >
+                      <div className="flex-1 min-w-0 mr-2">
+                        <div className="text-sm truncate" title={entry.url}>
+                          {truncateUrl(entry.url)}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatDate(entry.lastPlayedAt)} &middot; {formatTime(entry.position)}
+                        </div>
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        {formatDate(entry.lastPlayedAt)} &middot; {formatTime(entry.position)}
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => handleCopyEntry(e, entry.url)}
+                          className={`h-6 w-6 p-0 ${copiedUrl === entry.url ? "opacity-100 text-green-500" : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground"}`}
+                          title={copiedUrl === entry.url ? "Copied!" : "Copy URL"}
+                        >
+                          {copiedUrl === entry.url ? <CheckIcon className="w-4 h-4" /> : <CopyIcon className="w-4 h-4" />}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => handleDeleteEntry(e, entry.url)}
+                          className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                          title="Delete"
+                        >
+                          <XIcon className="w-4 h-4" />
+                        </Button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => handleCopyEntry(e, entry.url)}
-                        className={`h-6 w-6 p-0 ${copiedUrl === entry.url ? "opacity-100 text-green-500" : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground"}`}
-                        title={copiedUrl === entry.url ? "Copied!" : "Copy URL"}
-                      >
-                        {copiedUrl === entry.url ? <CheckIcon className="w-4 h-4" /> : <CopyIcon className="w-4 h-4" />}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => handleDeleteEntry(e, entry.url)}
-                        className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
-                        title="Delete"
-                      >
-                        <XIcon className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleClearHistory}
-                className="text-xs text-muted-foreground hover:text-destructive"
-              >
-                Clear All
-              </Button>
-            </>
-          )}
-        </div>
-      )}
+                  ))}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleClearHistory}
+                  className="text-xs text-muted-foreground hover:text-destructive"
+                >
+                  Clear All
+                </Button>
+              </>
+            )}
+          </>
+        )}
+        <NostrSyncPanel
+          history={history}
+          onHistoryLoaded={(merged) => {
+            setHistory(merged);
+            saveHistory(merged);
+          }}
+        />
+      </div>
     </div>
   );
 }
