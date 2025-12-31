@@ -16,10 +16,10 @@ export interface NostrKeys {
 const SALT = "audioplayer-pin-nostr-v1";
 const ITERATIONS = 100000;
 
-// PIN format: version prefix (1 char) + random data (12 chars) + checksum (1 char) = 14 chars
-const PIN_LENGTH = 14;
+// PIN format: version prefix (1 char) + random data (14 chars) + checksum (1 char) = 16 chars
+const PIN_LENGTH = 16;
 const PIN_VERSION = "a"; // Version 1
-const RANDOM_CHARS_LENGTH = 12;
+const RANDOM_CHARS_LENGTH = 14;
 
 // Printable non-space ASCII characters (33-126) for PIN generation
 // 94 characters total: !"#$%&'()*+,-./0-9:;<=>?@A-Z[\]^_`a-z{|}~
