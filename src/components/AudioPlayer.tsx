@@ -52,6 +52,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const gainRef = useRef<number>(1);
   const pausedAtTimestampRef = useRef<number | null>(null);
+  const pendingSeekTimerRef = useRef<number | null>(null);
   const pendingSeekAttemptsRef = useRef<number>(0);
 
   const [url, setUrl] = useState(initialUrl);
@@ -172,6 +173,10 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       if (hlsRef.current) {
         hlsRef.current.destroy();
       }
+      if (pendingSeekTimerRef.current) {
+        clearTimeout(pendingSeekTimerRef.current);
+        pendingSeekTimerRef.current = null;
+      }
     };
   }, [saveCurrentPosition]);
 
@@ -196,6 +201,10 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     // Set pending seek position from history entry
     pendingSeekPositionRef.current = entry.position;
     pendingSeekAttemptsRef.current = 0;
+    if (pendingSeekTimerRef.current) {
+      clearTimeout(pendingSeekTimerRef.current);
+      pendingSeekTimerRef.current = null;
+    }
     const urlToLoad = entry.url;
 
     const audio = audioRef.current;
@@ -370,6 +379,14 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     }
   };
 
+  const schedulePendingSeekRetry = () => {
+    if (pendingSeekTimerRef.current) return;
+    pendingSeekTimerRef.current = window.setTimeout(() => {
+      pendingSeekTimerRef.current = null;
+      applyPendingSeek();
+    }, 250);
+  };
+
   const applyPendingSeek = () => {
     const audio = audioRef.current;
     const pending = pendingSeekPositionRef.current;
@@ -382,9 +399,11 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       pendingSeekPositionRef.current = null;
       return;
     }
-    if (audio.seekable.length === 0) return;
-
-    if (pendingSeekAttemptsRef.current >= 5) {
+    if (audio.seekable.length === 0) {
+      schedulePendingSeekRetry();
+      return;
+    }
+    if (pendingSeekAttemptsRef.current >= 20) {
       pendingSeekPositionRef.current = null;
       return;
     }
@@ -395,6 +414,12 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
     if (Math.abs(audio.currentTime - pending) <= 0.5) {
       pendingSeekPositionRef.current = null;
+      if (pendingSeekTimerRef.current) {
+        clearTimeout(pendingSeekTimerRef.current);
+        pendingSeekTimerRef.current = null;
+      }
+    } else {
+      schedulePendingSeekRetry();
     }
   };
 
@@ -602,10 +627,13 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onCanPlay={applyPendingSeek}
+        onCanPlayThrough={applyPendingSeek}
         onPlay={() => {
           setIsPlaying(true);
           applyPendingSeek();
         }}
+        onPlaying={applyPendingSeek}
+        onSeeked={applyPendingSeek}
         onPause={handlePause}
         onEnded={() => setIsPlaying(false)}
         onError={() => setError("Audio playback error")}
