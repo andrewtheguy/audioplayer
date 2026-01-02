@@ -237,24 +237,24 @@ export function NostrSyncPanel({
         </div>
       )}
 
-      {displayMessage && (
-        <div
-          className={cn("text-xs p-2 rounded-md bg-muted/50 transition-colors",
-            status === "error" && "text-destructive bg-destructive/5 border border-destructive/10",
-            status !== "error" && "text-muted-foreground",
-            sessionStatus === 'stale' && "bg-amber-500/10 text-amber-600 border border-amber-500/20",
-            sessionStatus === 'idle' && "bg-blue-500/10 text-blue-600 border border-blue-500/20",
-            sessionStatus === 'invalid' && "bg-red-500/10 text-red-600 border border-red-500/20"
-          )}
-        >
-          {displayMessage}
-          {showTimestamp && (
-            <span className="block mt-1 opacity-75 text-[10px]">
-              {lastOperation.type === "saved" ? "Saved" : "Loaded"} at {lastOperation.timestamp}
-            </span>
-          )}
-        </div>
-      )}
+      <div
+        className={cn("text-xs p-2 rounded-md transition-colors min-h-[2.5rem]",
+          !displayMessage && "invisible",
+          displayMessage && "bg-muted/50",
+          status === "error" && "text-destructive bg-destructive/5 border border-destructive/10",
+          status !== "error" && "text-muted-foreground",
+          sessionStatus === 'stale' && displayMessage && "bg-amber-500/10 text-amber-600 border border-amber-500/20",
+          sessionStatus === 'idle' && displayMessage && "bg-blue-500/10 text-blue-600 border border-blue-500/20",
+          sessionStatus === 'invalid' && displayMessage && "bg-red-500/10 text-red-600 border border-red-500/20"
+        )}
+      >
+        {displayMessage}
+        {showTimestamp && (
+          <span className="block mt-1 opacity-75 text-[10px]">
+            {lastOperation.type === "saved" ? "Saved" : "Loaded"} at {lastOperation.timestamp}
+          </span>
+        )}
+      </div>
 
       {/* Collapsible details panel */}
       <div className="pt-1">
