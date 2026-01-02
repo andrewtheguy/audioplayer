@@ -59,7 +59,7 @@ describe("isValidSecret", () => {
   });
 
   it("returns false for invalid base64 characters", () => {
-    expect(isValidSecret("!!!!!!!!!!!!!!!!")); // 16 invalid chars
+    expect(isValidSecret("!!!!!!!!!!!!!!!!")).toBe(false); // 16 invalid chars
   });
 
   it("detects single character typos (checksum validation)", () => {
