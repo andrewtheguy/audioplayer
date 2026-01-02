@@ -143,8 +143,9 @@ export function NostrSyncPanel({
                  {sessionStatus === 'active' && <span className="text-[10px] text-green-500 font-bold px-1.5 py-0.5 bg-green-500/10 rounded-full">ACTIVE</span>}
                  {sessionStatus === 'idle' && <span className="text-[10px] text-blue-500 font-bold px-1.5 py-0.5 bg-blue-500/10 rounded-full">IDLE</span>}
                  {sessionStatus === 'stale' && <span className="text-[10px] text-amber-500 font-bold px-1.5 py-0.5 bg-amber-500/10 rounded-full">READ-ONLY</span>}
+                 {sessionStatus === 'invalid' && <span className="text-[10px] text-red-500 font-bold px-1.5 py-0.5 bg-red-500/10 rounded-full">INVALID</span>}
                  <span className="font-mono text-[10px] opacity-70" title="Your secret key is in the URL">
-                     Connected
+                     {sessionStatus === 'invalid' ? 'Error' : 'Connected'}
                  </span>
              </div>
         )}
@@ -163,6 +164,17 @@ export function NostrSyncPanel({
             className="w-full h-8 text-xs"
           >
             Generate Secret Link
+          </Button>
+        </div>
+      ) : sessionStatus === 'invalid' ? (
+        <div className="space-y-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleGenerate}
+            className="w-full h-8 text-xs"
+          >
+            Generate New Secret Link
           </Button>
         </div>
       ) : (
@@ -212,7 +224,8 @@ export function NostrSyncPanel({
             status === "error" && "text-destructive bg-destructive/5 border border-destructive/10",
             status !== "error" && "text-muted-foreground",
             sessionStatus === 'stale' && "bg-amber-500/10 text-amber-600 border border-amber-500/20",
-            sessionStatus === 'idle' && "bg-blue-500/10 text-blue-600 border border-blue-500/20"
+            sessionStatus === 'idle' && "bg-blue-500/10 text-blue-600 border border-blue-500/20",
+            sessionStatus === 'invalid' && "bg-red-500/10 text-red-600 border border-red-500/20"
           )}
         >
           {displayMessage}

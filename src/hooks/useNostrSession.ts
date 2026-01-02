@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isValidSecret } from "@/lib/nostr-crypto";
 
-export type SessionStatus = "idle" | "active" | "stale" | "unknown";
+export type SessionStatus = "idle" | "active" | "stale" | "invalid" | "unknown";
 
 interface UseNostrSessionOptions {
   sessionId?: string;
@@ -28,6 +29,12 @@ function getSecretFromHash(): string {
   return hash.startsWith("#") ? hash.slice(1) : hash;
 }
 
+function getInitialStatus(secret: string): SessionStatus {
+  if (!secret) return "unknown";
+  if (!isValidSecret(secret)) return "invalid";
+  return "idle";
+}
+
 export function useNostrSession({
   sessionId,
   onSessionStatusChange,
@@ -35,9 +42,15 @@ export function useNostrSession({
 }: UseNostrSessionOptions): UseNostrSessionResult {
   const [secret, setSecret] = useState(getSecretFromHash);
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>(() =>
-    getSecretFromHash() ? "idle" : "unknown"
+    getInitialStatus(getSecretFromHash())
   );
-  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(() => {
+    const s = getSecretFromHash();
+    if (s && !isValidSecret(s)) {
+      return "Invalid secret link. Check for typos in the URL.";
+    }
+    return null;
+  });
   const [localSessionId] = useState(() => sessionId ?? crypto.randomUUID());
   const [ignoreRemoteUntil, setIgnoreRemoteUntil] = useState<number>(0);
 
@@ -80,11 +93,11 @@ export function useNostrSession({
     const handleHashChange = () => {
       const newSecret = getSecretFromHash();
       setSecret(newSecret);
-      if (newSecret) {
-        setSessionStatus("idle");
-        setSessionNotice(null);
+      const newStatus = getInitialStatus(newSecret);
+      setSessionStatus(newStatus);
+      if (newStatus === "invalid") {
+        setSessionNotice("Invalid secret link. Check for typos in the URL.");
       } else {
-        setSessionStatus("unknown");
         setSessionNotice(null);
       }
     };

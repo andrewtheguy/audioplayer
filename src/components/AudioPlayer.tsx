@@ -116,7 +116,7 @@ function AudioPlayerInner({
   const [gainEnabled, setGainEnabled] = useState(false);
   const [gain, setGain] = useState(1); // 1 = 100%
   const [isSessionStale, setIsSessionStale] = useState(false);
-  const [actualSessionStatus, setActualSessionStatus] = useState<"idle" | "active" | "stale" | "unknown">("unknown");
+  const [actualSessionStatus, setActualSessionStatus] = useState<"idle" | "active" | "stale" | "invalid" | "unknown">("unknown");
   const [editingUrl, setEditingUrl] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [showLoadInputs, setShowLoadInputs] = useState(true);
@@ -816,9 +816,9 @@ function AudioPlayerInner({
   }, [isPlaying, loadFromHistory]);
 
   const showLiveCta = isLiveStream && !isPlaying;
-  const handleSessionStatusChange = useCallback((status: "idle" | "active" | "stale" | "unknown") => {
-    // Both idle and stale are read-only states
-    setIsSessionStale(status === "stale" || status === "idle");
+  const handleSessionStatusChange = useCallback((status: "idle" | "active" | "stale" | "invalid" | "unknown") => {
+    // idle, stale, and invalid are read-only states
+    setIsSessionStale(status === "stale" || status === "idle" || status === "invalid");
     setActualSessionStatus(status);
     if (status === "stale") {
       // Only stale (takeover) needs to pause and cleanup - idle is just viewing
