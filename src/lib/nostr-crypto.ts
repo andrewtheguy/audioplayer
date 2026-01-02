@@ -135,16 +135,15 @@ function isValidHexPublicKey(value: string): boolean {
   return value.length === 64 && /^[0-9a-fA-F]+$/.test(value);
 }
 
-function isValidNpub(value: string): boolean {
+function decodeValidNpub(value: string): string | null {
   try {
     const decoded = decodeNip19(value);
-    return (
-      decoded.type === "npub" &&
-      typeof decoded.data === "string" &&
-      isValidHexPublicKey(decoded.data)
-    );
+    if (decoded.type !== "npub" || typeof decoded.data !== "string") {
+      return null;
+    }
+    return isValidHexPublicKey(decoded.data) ? decoded.data : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -161,30 +160,20 @@ export function decryptHistory(
     throw new Error("Invalid senderPublicKey: empty");
   }
   const isHexSender = isValidHexPublicKey(senderPublicKey);
-  const isNpubSender = !isHexSender && isValidNpub(senderPublicKey);
+  const decodedNpub = !isHexSender ? decodeValidNpub(senderPublicKey) : null;
+  const isNpubSender = !isHexSender && !!decodedNpub;
   if (!isHexSender && !isNpubSender) {
     throw new Error("Invalid senderPublicKey: expected 64-char hex or npub");
   }
 
   let senderHex = senderPublicKey;
   if (!isHexSender) {
-    try {
-      const decoded = decodeNip19(senderPublicKey);
-      if (
-        decoded.type !== "npub" ||
-        typeof decoded.data !== "string" ||
-        !isValidHexPublicKey(decoded.data)
-      ) {
-        throw new Error(
-          `Invalid senderPublicKey: npub decode produced invalid hex (${decoded.data})`
-        );
-      }
-      senderHex = decoded.data;
-    } catch (err) {
+    if (!decodedNpub) {
       throw new Error(
-        `Invalid senderPublicKey: failed to decode npub (${senderPublicKey}). ${err instanceof Error ? err.message : "Unknown error"}`
+        `Invalid senderPublicKey: npub decode produced invalid hex (input=${senderPublicKey}, decoded=${decodedNpub})`
       );
     }
+    senderHex = decodedNpub;
   }
 
   let plaintext: string;

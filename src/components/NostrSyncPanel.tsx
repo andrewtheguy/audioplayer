@@ -53,6 +53,7 @@ export function NostrSyncPanel({
 
   const messageRef = useRef<string | null>(null);
   const copyMessageTimerRef = useRef<number | null>(null);
+  const copiedLinkTimerRef = useRef<number | null>(null);
 
   const isLoading = status === "saving" || status === "loading";
   const displayMessage = sessionNotice ?? message;
@@ -68,6 +69,10 @@ export function NostrSyncPanel({
 
   useEffect(() => {
     return () => {
+      if (copiedLinkTimerRef.current) {
+        clearTimeout(copiedLinkTimerRef.current);
+        copiedLinkTimerRef.current = null;
+      }
       if (copyMessageTimerRef.current) {
         clearTimeout(copyMessageTimerRef.current);
         copyMessageTimerRef.current = null;
@@ -88,7 +93,13 @@ export function NostrSyncPanel({
     try {
       await navigator.clipboard.writeText(url);
       setCopiedLink(true);
-      setTimeout(() => setCopiedLink(false), 2000);
+      if (copiedLinkTimerRef.current) {
+        clearTimeout(copiedLinkTimerRef.current);
+      }
+      copiedLinkTimerRef.current = window.setTimeout(() => {
+        setCopiedLink(false);
+        copiedLinkTimerRef.current = null;
+      }, 2000);
 
       // If we are in success state, keep the message, otherwise show temporary copy feedback
       if (status !== "success") {
