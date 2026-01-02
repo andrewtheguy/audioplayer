@@ -295,7 +295,10 @@ export function useNostrSync({
       });
       skipNextDirtyRef.current = true;
       onHistoryLoadedRef.current(result.merged);
-      if (isTakeOver) {
+      // Only trigger onTakeOver when transitioning from stale state (actual device takeover)
+      // Don't trigger when starting from idle (first-time session start) to avoid
+      // component remount that would abort the in-progress startSession operation
+      if (isTakeOver && sessionStatusRef.current === "stale") {
         onTakeOverRef.current?.(cloudHistory);
       }
       if (followRemote) {
@@ -326,6 +329,7 @@ export function useNostrSync({
       }
 
       if (isTakeOver || !remoteSid || remoteSid === localSessionId) {
+        console.log("[nostr-sync] updateSessionStateAndMaybeSave: setting status to active");
         setSessionStatus("active");
         clearSessionNotice();
         if (isTakeOver || !remoteSid) {
@@ -348,6 +352,7 @@ export function useNostrSync({
       const signal = abortRef.current?.signal;
       if (signal?.aborted) return;
 
+      console.log("[nostr-sync] performLoad: starting, isTakeOver:", isTakeOver, "status:", sessionStatusRef.current);
       const followRemote = options?.followRemote === true;
       const silent = options?.silent === true;
       if (!silent) {
@@ -419,7 +424,11 @@ export function useNostrSync({
           void performSave(currentSecret, historyRef.current, { allowStale: true });
         }
       } catch (err) {
-        if (!isActive()) return;
+        if (!isActive()) {
+          console.log("[nostr-sync] performLoad: aborted (component unmounted)");
+          return;
+        }
+        console.error("[nostr-sync] performLoad: error", err);
         if (!silent) {
           setStatus("error");
           if (err instanceof TimeoutError) {
@@ -456,6 +465,7 @@ export function useNostrSync({
       const signal = abortRef.current?.signal;
       if (signal?.aborted) return;
 
+      console.log("[nostr-sync] performInitialLoad: starting");
       setStatus("loading");
       setMessage("Loading history...");
 
@@ -515,8 +525,10 @@ export function useNostrSync({
   const startSession = useCallback(
     async (currentSecret: string) => {
       if (!currentSecret || !isActive()) return;
+      console.log("[nostr-sync] startSession: claiming session, current status:", sessionStatusRef.current);
       // Use performLoad with isTakeOver=true to claim the session
       await performLoad(currentSecret, true);
+      console.log("[nostr-sync] startSession: complete, new status:", sessionStatusRef.current);
     },
     [isActive, performLoad]
   );
