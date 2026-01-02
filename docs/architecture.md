@@ -166,28 +166,25 @@ URL: https://app.example.com/#<secret>
 This section documents the current behavior and intended resilience strategy for sync and playback history.
 
 **Relay unavailability**
-- **Current behavior:** Load/save failures surface as sync status `error` with a user-visible message; local playback/history continues. Subscriptions can fail silently except for console logs.
-- **Intended behavior:** Graceful local-only mode with a visible “offline/relay unavailable” indicator, plus retry with exponential backoff and relay failover across the configured relay list.
+- ✅ **Current Behavior:** Load/save failures surface as sync status `error` with a user-visible message; local playback/history continues. Subscription setup failures are logged; relay drops can go unnoticed aside from console logs.
+- ⚠️ **Intended Behavior (Roadmap):** Graceful local-only mode with a visible “offline/relay unavailable” indicator, retry with exponential backoff, and relay failover across the configured relay list (not implemented).
 
 **Failed encryption/decryption**
-- **Current behavior:** Decryption errors are surfaced as user-facing errors and logged; bad blobs are not merged.
-- **Intended behavior:** Abort the failing operation, log the error for debugging, and ignore/discard corrupted cloud blobs after repeated failures to prevent blocking future syncs.
+- ✅ **Current Behavior:** Decryption errors are surfaced as user-facing errors and logged; bad blobs are not merged.
+- ⚠️ **Intended Behavior (Roadmap):** Discard corrupted cloud blobs after repeated failures to prevent blocking future syncs (not implemented).
 
 **Merge conflict strategy (`mergeHistory`)**
-- Deterministic per-URL merge. Default behavior preserves local ordering and adds remote entries that don’t exist locally.
-- If `preferRemote` is enabled (e.g., takeover), remote entries replace local entries for the same URL.
-- If `preferRemoteOrder` is enabled, remote ordering is used and local-only entries are appended.
-- Manual takeover explicitly resolves conflicts by preferring remote content and then re‑publishing as the active session.
+- ✅ **Current Behavior:** Deterministic per-URL merge. Default behavior preserves local ordering and adds remote entries that don’t exist locally. If `preferRemote` is enabled (e.g., takeover), remote entries replace local entries for the same URL. If `preferRemoteOrder` is enabled, remote ordering is used and local-only entries are appended. Manual takeover explicitly resolves conflicts by preferring remote content and then re‑publishing as the active session.
+- ⚠️ **Intended Behavior (Roadmap):** More granular per-entry reconciliation rules beyond session-based takeover (not implemented).
 
 **Offline/network transience**
-- **Current behavior:** Auto-save is debounced; failed saves surface errors but are not queued for retry.
-- **Intended behavior:** Maintain a retry queue for pending save operations, apply exponential backoff, and replay queued operations when the network reconnects.
+- ✅ **Current Behavior:** Auto-save is debounced; failed saves surface errors but are not queued for retry.
+- ⚠️ **Intended Behavior (Roadmap):** Maintain a retry queue for pending save operations, apply exponential backoff, and replay queued operations when the network reconnects (not implemented).
 
 **Browser requirements / limitations**
-- Requires Web Crypto API (SubtleCrypto) for key derivation and encryption.
-- Uses `localStorage` for history; subject to browser quotas and private‑mode limitations.
-- Relies on network access to Nostr relays; no service worker or offline cache is provided.
-- Recommended guidance: use modern Chromium/Firefox/Safari; avoid private browsing for persistent history; expect sync to be unavailable when offline or when relay access is blocked by network policy.
+- ✅ **Current Behavior:** Requires Web Crypto API (SubtleCrypto) for key derivation/encryption and uses `localStorage` for history. Relies on network access to Nostr relays; no service worker/offline cache.
+- ⚠️ **Intended Behavior (Roadmap):** Provide explicit offline UI guidance and optional local-only mode when relay access is blocked (not implemented).
+  Recommended guidance: use modern Chromium/Firefox/Safari; avoid private browsing for persistent history; expect sync to be unavailable when offline or when relay access is blocked by network policy.
 
 ## Known Limitations
 

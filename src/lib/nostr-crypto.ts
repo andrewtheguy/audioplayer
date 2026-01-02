@@ -160,13 +160,36 @@ export function decryptHistory(
   if (typeof senderPublicKey !== "string" || senderPublicKey.length === 0) {
     throw new Error("Invalid senderPublicKey: empty");
   }
-  if (!isValidHexPublicKey(senderPublicKey) && !isValidNpub(senderPublicKey)) {
+  const isHexSender = isValidHexPublicKey(senderPublicKey);
+  const isNpubSender = !isHexSender && isValidNpub(senderPublicKey);
+  if (!isHexSender && !isNpubSender) {
     throw new Error("Invalid senderPublicKey: expected 64-char hex or npub");
+  }
+
+  let senderHex = senderPublicKey;
+  if (!isHexSender) {
+    try {
+      const decoded = decodeNip19(senderPublicKey);
+      if (
+        decoded.type !== "npub" ||
+        typeof decoded.data !== "string" ||
+        !isValidHexPublicKey(decoded.data)
+      ) {
+        throw new Error(
+          `Invalid senderPublicKey: npub decode produced invalid hex (${decoded.data})`
+        );
+      }
+      senderHex = decoded.data;
+    } catch (err) {
+      throw new Error(
+        `Invalid senderPublicKey: failed to decode npub (${senderPublicKey}). ${err instanceof Error ? err.message : "Unknown error"}`
+      );
+    }
   }
 
   let plaintext: string;
   try {
-    const conversationKey = getConversationKey(recipientPrivateKey, senderPublicKey);
+    const conversationKey = getConversationKey(recipientPrivateKey, senderHex);
     plaintext = decrypt(ciphertext, conversationKey);
   } catch (err) {
     throw new Error(

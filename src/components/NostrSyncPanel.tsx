@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { generateSecret } from "@/lib/nostr-crypto";
 import { RELAYS } from "@/lib/nostr-sync";
@@ -51,6 +51,9 @@ export function NostrSyncPanel({
       onTakeOver,
     });
 
+  const messageRef = useRef<string | null>(null);
+  const copyMessageTimerRef = useRef<number | null>(null);
+
   const isLoading = status === "saving" || status === "loading";
   const displayMessage = sessionNotice ?? message;
   const showTimestamp =
@@ -58,6 +61,19 @@ export function NostrSyncPanel({
     lastOperation?.type &&
     lastOperation.type !== "loaded" &&
     sessionStatus !== "stale";
+
+  useEffect(() => {
+    messageRef.current = message;
+  }, [message]);
+
+  useEffect(() => {
+    return () => {
+      if (copyMessageTimerRef.current) {
+        clearTimeout(copyMessageTimerRef.current);
+        copyMessageTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const handleGenerate = () => {
     const newSecret = generateSecret();
@@ -78,14 +94,14 @@ export function NostrSyncPanel({
       if (status !== "success") {
           setMessage("Link copied to clipboard!");
           // Reset message after delay if it was just the copy confirmation
-          setTimeout(() => {
-              // We need to check the current status via a ref or functional update if we were inside the effect,
-              // but here we just want to clear if it hasn't changed to something important.
-              // However, since we can't easily check 'current' status inside timeout without refs,
-              // we'll just clear if the message is still the copy message.
-              if (message === "Link copied to clipboard!") {
+          if (copyMessageTimerRef.current) {
+            clearTimeout(copyMessageTimerRef.current);
+          }
+          copyMessageTimerRef.current = window.setTimeout(() => {
+              if (messageRef.current === "Link copied to clipboard!") {
                 setMessage(null);
               }
+              copyMessageTimerRef.current = null;
           }, 3000);
       }
     } catch {
