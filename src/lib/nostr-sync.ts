@@ -12,7 +12,7 @@ export const RELAYS = [
 ];
 
 const KIND_HISTORY = 30078; // NIP-78: Application-specific replaceable data
-const D_TAG = "audioplayer-v2";
+const D_TAG = "audioplayer-v3";
 
 const pool = new SimplePool();
 
@@ -185,49 +185,6 @@ export async function loadHistoryFromNostr(
     payload.ephemeralPubKey,
     userPrivateKey
   );
-}
-
-/**
- * Subscribe to history updates
- * Returns a cleanup function to unsubscribe
- */
-export function subscribeToHistory(
-  userPublicKey: string,
-  onEvent: (sessionId: string | null) => void
-): () => void {
-  try {
-    const sub = pool.subscribeMany(
-      RELAYS,
-      {
-        kinds: [KIND_HISTORY],
-        authors: [userPublicKey],
-        "#d": [D_TAG],
-      },
-      {
-        onevent: (event) => {
-          try {
-            const sessionTag = event.tags.find((t) => t[0] === "session");
-            onEvent(sessionTag ? sessionTag[1] : null);
-          } catch (err) {
-            console.error("Nostr history event handler failed:", err);
-          }
-        },
-      }
-    );
-
-    if (canSetOnError(sub)) {
-      sub.onerror = (err) => {
-        console.error("Nostr history subscription error:", err);
-      };
-    }
-
-    return () => {
-      sub.close();
-    };
-  } catch (err) {
-    console.error("Failed to subscribe to Nostr history:", err);
-    return () => {};
-  }
 }
 
 /**

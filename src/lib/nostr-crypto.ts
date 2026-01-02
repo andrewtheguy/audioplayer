@@ -12,16 +12,68 @@ export interface NostrKeys {
 const SALT = "audioplayer-secret-nostr-v1";
 
 /**
- * Generate a random URL-safe Base64 secret.
- * Uses 12 bytes of entropy (96 bits), resulting in a 16-character string.
+ * Compute a simple checksum byte (XOR of all bytes).
+ */
+function computeChecksum(bytes: Uint8Array): number {
+  let checksum = 0;
+  for (const b of bytes) {
+    checksum ^= b;
+  }
+  return checksum;
+}
+
+/**
+ * Decode URL-safe Base64 to Uint8Array.
+ */
+function decodeUrlSafeBase64(str: string): Uint8Array | null {
+  try {
+    const base64 = str.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Generate a random URL-safe Base64 secret with checksum.
+ * Uses 11 bytes of entropy (88 bits) + 1 checksum byte, resulting in a 16-character string.
+ * The checksum allows fail-fast validation of typos before attempting decryption.
  */
 export function generateSecret(): string {
-  const bytes = new Uint8Array(12);
-  crypto.getRandomValues(bytes);
-  return btoa(String.fromCharCode(...bytes))
+  const randomBytes = new Uint8Array(11);
+  crypto.getRandomValues(randomBytes);
+  const checksum = computeChecksum(randomBytes);
+  const allBytes = new Uint8Array(12);
+  allBytes.set(randomBytes);
+  allBytes[11] = checksum;
+  return btoa(String.fromCharCode(...allBytes))
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "");
+}
+
+/**
+ * Validate a secret string has correct format and checksum.
+ * Returns true if valid, false if checksum fails or format is invalid.
+ */
+export function isValidSecret(secret: string): boolean {
+  if (typeof secret !== "string" || secret.length !== 16) {
+    return false;
+  }
+  const bytes = decodeUrlSafeBase64(secret);
+  if (!bytes || bytes.length !== 12) {
+    return false;
+  }
+  const randomBytes = bytes.slice(0, 11);
+  const storedChecksum = bytes[11];
+  const computedChecksum = computeChecksum(randomBytes);
+  return storedChecksum === computedChecksum;
 }
 
 /**
