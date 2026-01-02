@@ -15,7 +15,7 @@ interface NostrSyncPanelProps {
   history: HistoryEntry[];
   onHistoryLoaded: (merged: HistoryEntry[]) => void;
   onSessionStatusChange?: (status: SessionStatus) => void;
-  onTakeOver?: (merged: HistoryEntry[]) => void;
+  onTakeOver?: (remoteHistory: HistoryEntry[]) => void;
 }
 
 type SyncStatus = "idle" | "saving" | "loading" | "success" | "error";
@@ -222,7 +222,7 @@ export function NostrSyncPanel({
         });
         onHistoryLoadedRef.current(result.merged);
         if (isTakeOver) {
-          onTakeOverRef.current?.(result.merged);
+          onTakeOverRef.current?.(cloudHistory);
         }
         
         setStatus("success");

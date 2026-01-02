@@ -770,9 +770,9 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
             saveHistory(merged);
           }}
           onSessionStatusChange={handleSessionStatusChange}
-          onTakeOver={(merged) => {
-            if (merged.length > 0) {
-              loadFromHistory(merged[0]);
+          onTakeOver={(remoteHistory) => {
+            if (remoteHistory.length > 0) {
+              loadFromHistory(remoteHistory[0]);
             }
           }}
         />
