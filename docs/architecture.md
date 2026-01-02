@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is an HLS audio player built with React and TypeScript that supports cross-device synchronization via the Nostr protocol. The application allows users to play HLS streams, track playback history, and sync their listening position across multiple devices using encrypted Nostr events.
+This is an audio player built with React and TypeScript that supports cross-device synchronization via the Nostr protocol. The application allows users to play standard audio files and HLS streams, track playback history, and sync their listening position across multiple devices using encrypted Nostr events.
 
 ## Tech Stack
 
@@ -149,7 +149,7 @@ Nostr protocol integration for cloud sync.
 
 **Event structure (NIP-78):**
 - Kind: 30078 (application-specific replaceable)
-- d-tag: "audioplayer-history"
+- d-tag: "audioplayer-v2"
 
 **Session tag strategy**
 - ✅ **Current:** UUIDv4 generated via `crypto.randomUUID()` per client session.

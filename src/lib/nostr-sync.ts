@@ -11,7 +11,7 @@ export const RELAYS = [
 ];
 
 const KIND_HISTORY = 30078; // NIP-78: Application-specific replaceable data
-const D_TAG = "audioplayer-history";
+const D_TAG = "audioplayer-v2";
 
 const pool = new SimplePool();
 
