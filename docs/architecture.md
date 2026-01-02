@@ -43,7 +43,7 @@ Manages session state and takeover grace periods:
 
 - **Session Status**: Tracks `idle`, `active`, `stale`, `invalid`, or `unknown` status
 - **Secret Validation**: Validates URL hash checksum on load via `isValidSecret()` for fail-fast typo detection
-- **Initial State**: On page load, state is `idle` (valid secret present), `invalid` (bad checksum), or `unknown` (no secret)
+- **Initial State**: On page load, state is one of: `idle` (valid secret present), `invalid` (bad checksum), or `unknown` (no secret)
 - **Bootstrap Paths**: `unknown` → `idle` → `active` (generate secret, then start session) or `idle` → `active` (start session with existing secret)
 - **Takeover Grace**: Provides `ignoreRemoteUntil` timestamp to suppress remote events briefly after takeover
 - **Session ID**: Generates unique session IDs via `crypto.randomUUID()`
