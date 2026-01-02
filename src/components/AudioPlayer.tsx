@@ -22,6 +22,7 @@ interface AudioPlayerInnerProps extends AudioPlayerProps {
   takeoverEntry?: HistoryEntry | null;
   onTakeoverApplied?: () => void;
   onRequestReset?: (entry: HistoryEntry | null) => void;
+  sessionId?: string;
 }
 
 function formatTime(seconds: number): string {
@@ -50,6 +51,7 @@ function truncateUrl(url: string, maxLength = 40): string {
 export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const [resetKey, setResetKey] = useState(0);
   const [takeoverEntry, setTakeoverEntry] = useState<HistoryEntry | null>(null);
+  const [sessionId] = useState(() => crypto.randomUUID());
 
   const handleRequestReset = useCallback((entry: HistoryEntry | null) => {
     setTakeoverEntry(entry);
@@ -63,6 +65,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       takeoverEntry={takeoverEntry}
       onTakeoverApplied={() => setTakeoverEntry(null)}
       onRequestReset={handleRequestReset}
+      sessionId={sessionId}
     />
   );
 }
@@ -72,6 +75,7 @@ function AudioPlayerInner({
   takeoverEntry,
   onTakeoverApplied,
   onRequestReset,
+  sessionId,
 }: AudioPlayerInnerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -876,6 +880,7 @@ function AudioPlayerInner({
           onTakeOver={(remoteHistory) => {
             onRequestReset?.(remoteHistory.length > 0 ? remoteHistory[0] : null);
           }}
+          sessionId={sessionId}
         />
       </div>
     </div>

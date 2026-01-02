@@ -16,6 +16,7 @@ interface NostrSyncPanelProps {
   onHistoryLoaded: (merged: HistoryEntry[]) => void;
   onSessionStatusChange?: (status: SessionStatus) => void;
   onTakeOver?: (remoteHistory: HistoryEntry[]) => void;
+  sessionId?: string;
 }
 
 type SyncStatus = "idle" | "saving" | "loading" | "success" | "error";
@@ -104,6 +105,7 @@ export function NostrSyncPanel({
   onHistoryLoaded,
   onSessionStatusChange,
   onTakeOver,
+  sessionId,
 }: NostrSyncPanelProps) {
   const [secret, setSecret] = useState(getSecretFromHash());
   const [status, setStatus] = useState<SyncStatus>("idle");
@@ -113,7 +115,7 @@ export function NostrSyncPanel({
   const [copiedLink, setCopiedLink] = useState(false);
 
   // Session Management
-  const [localSessionId] = useState(() => crypto.randomUUID());
+  const [localSessionId] = useState(() => sessionId ?? crypto.randomUUID());
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>("unknown");
   // const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null);
 
