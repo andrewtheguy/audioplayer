@@ -204,6 +204,67 @@ export function useNostrSync({
     [localSessionId, operationTimeoutMs]
   );
 
+  const detectStaleSession = useCallback(
+    (isTakeOver: boolean, remoteSid?: string, localSid?: string) =>
+      !isTakeOver && !!remoteSid && remoteSid !== localSid,
+    []
+  );
+
+  const handleStaleSession = useCallback(() => {
+    setSessionStatus("stale");
+    setStatus("success");
+    setSessionNotice(
+      "Another session is active — viewing in read-only mode. Take over to edit."
+    );
+  }, [setSessionStatus, setSessionNotice]);
+
+  const mergeAndNotify = useCallback(
+    (cloudHistory: HistoryEntry[], isTakeOver: boolean) => {
+      const result = mergeHistory(historyRef.current, cloudHistory, {
+        preferRemote: isTakeOver,
+        preferRemoteOrder: isTakeOver,
+      });
+      skipNextDirtyRef.current = true;
+      onHistoryLoadedRef.current(result.merged);
+      if (isTakeOver) {
+        onTakeOverRef.current?.(cloudHistory);
+      }
+      return result;
+    },
+    []
+  );
+
+  const updateSessionStateAndMaybeSave = useCallback(
+    (
+      currentSecret: string,
+      result: { merged: HistoryEntry[]; addedFromCloud: number },
+      isTakeOver: boolean,
+      remoteSid?: string,
+      isStaleRemote?: boolean
+    ) => {
+      setStatus("success");
+      dirtyRef.current = false;
+      if (!isStaleRemote) {
+        setMessage(
+          result.addedFromCloud > 0
+            ? `Added ${result.addedFromCloud} entries from cloud`
+            : "History is up to date"
+        );
+      }
+
+      if (isTakeOver || !remoteSid || remoteSid === localSessionId) {
+        setSessionStatus("active");
+        clearSessionNotice();
+        if (isTakeOver || !remoteSid) {
+          void performSave(currentSecret, result.merged, {
+            allowStale: isTakeOver,
+          });
+        }
+      }
+    },
+    [clearSessionNotice, localSessionId, performSave, setSessionStatus]
+  );
+
   const performLoad = useCallback(
     async (currentSecret: string, isTakeOver = false) => {
       if (!currentSecret) return;
@@ -234,45 +295,23 @@ export function useNostrSync({
         if (cloudData) {
           const { history: cloudHistory, sessionId: remoteSid } = cloudData;
 
-          const isStaleRemote =
-            !isTakeOver && remoteSid && remoteSid !== localSessionId;
+          const isStaleRemote = detectStaleSession(
+            isTakeOver,
+            remoteSid ?? undefined,
+            localSessionId
+          );
           if (isStaleRemote) {
-            setSessionStatus("stale");
-            setStatus("success");
-            setSessionNotice(
-              "Another session is active — viewing in read-only mode. Take over to edit."
-            );
+            handleStaleSession();
           }
 
-          const result = mergeHistory(historyRef.current, cloudHistory, {
-            preferRemote: isTakeOver,
-            preferRemoteOrder: isTakeOver,
-          });
-          skipNextDirtyRef.current = true;
-          onHistoryLoadedRef.current(result.merged);
-          if (isTakeOver) {
-            onTakeOverRef.current?.(cloudHistory);
-          }
-
-          setStatus("success");
-          dirtyRef.current = false;
-          if (!isStaleRemote) {
-            setMessage(
-              result.addedFromCloud > 0
-                ? `Added ${result.addedFromCloud} entries from cloud`
-                : "History is up to date"
-            );
-          }
-
-          if (isTakeOver || !remoteSid || remoteSid === localSessionId) {
-            setSessionStatus("active");
-            clearSessionNotice();
-            if (isTakeOver || !remoteSid) {
-              void performSave(currentSecret, result.merged, {
-                allowStale: isTakeOver,
-              });
-            }
-          }
+          const result = mergeAndNotify(cloudHistory, isTakeOver);
+          updateSessionStateAndMaybeSave(
+            currentSecret,
+            result,
+            isTakeOver,
+            remoteSid ?? undefined,
+            isStaleRemote
+          );
         } else {
           setStatus("success");
           setSessionStatus("active");
@@ -292,10 +331,13 @@ export function useNostrSync({
     },
     [
       clearSessionNotice,
+      detectStaleSession,
+      handleStaleSession,
       localSessionId,
+      mergeAndNotify,
       operationTimeoutMs,
       performSave,
-      setSessionNotice,
+      updateSessionStateAndMaybeSave,
       setSessionStatus,
       startTakeoverGrace,
     ]
