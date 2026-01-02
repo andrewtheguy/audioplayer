@@ -20,10 +20,13 @@ src/
 ├── App.tsx                  # Root component
 ├── components/
 │   ├── AudioPlayer.tsx      # Main audio player component
-│   ├── NostrSyncPanel.tsx   # Nostr sync UI and logic
+│   ├── NostrSyncPanel.tsx   # Nostr sync UI and orchestration
 │   └── ui/                  # shadcn/ui components (button, slider, input)
+├── hooks/
+│   ├── useNostrSession.ts   # Session state and takeover grace management
+│   └── useNostrSync.ts      # Nostr sync operations (master-slave architecture)
 └── lib/
-    ├── history.ts           # Local history persistence (localStorage)
+    ├── history.ts           # History types and payload validation
     ├── nostr-sync.ts        # Nostr relay communication
     ├── nostr-crypto.ts      # Key derivation and encryption
     └── utils.ts             # Utility functions (cn)
@@ -48,12 +51,30 @@ Key features:
 
 ### NostrSyncPanel (`components/NostrSyncPanel.tsx`)
 
-Handles cross-device synchronization:
+Orchestrates cross-device synchronization by connecting session management with sync logic:
 
-- **Session Management**: Tracks active/stale session status
+- **Session Management**: Coordinates with `useNostrSession` for active/stale status
+- **Sync Delegation**: Uses `useNostrSync` for all sync operations
+- **Takeover UI**: Provides controls for claiming sessions from other devices
+
+### useNostrSession (`hooks/useNostrSession.ts`)
+
+Manages session state and takeover grace periods:
+
+- **Session Status**: Tracks `active`, `stale`, or `unknown` status
+- **Takeover Grace**: Provides `ignoreRemoteUntil` timestamp to suppress remote events briefly after takeover
+- **Session ID**: Generates unique session IDs via `crypto.randomUUID()`
+
+### useNostrSync (`hooks/useNostrSync.ts`)
+
+Handles all Nostr synchronization using a master-slave architecture (inspired by NostrPad):
+
+- **Timestamp-based Ordering**: Uses millisecond timestamps embedded in payloads for reliable event ordering
+- **Real-time Subscription**: Subscribes to Nostr events for instant cross-device updates
 - **Auto-save**: Debounced saves when history changes (5s delay)
-- **Takeover Logic**: Allows claiming a session from another device
-- **Real-time Updates**: Subscribes to Nostr events for session changes
+- **Live Position Updates**: Publishes position every 5s during active playback for slave device sync
+- **Local Change Protection**: Uses `isLocalChangeRef` to prevent remote overwrites during local operations
+- **Duplicate Prevention**: Uses `pendingPublishRef` to avoid concurrent publishes
 
 ## Data Flow
 
@@ -65,17 +86,20 @@ User Action → AudioPlayer → saveCurrentPosition() → localStorage
                               history state update
 ```
 
-### Nostr Sync Flow
+### Nostr Sync Flow (Master-Slave Architecture)
 
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────┐
-│  AudioPlayer    │────▶│  NostrSyncPanel  │────▶│ Nostr Relays│
-│  (history state)│◀────│  (sync logic)    │◀────│ (storage)   │
-└─────────────────┘     └──────────────────┘     └─────────────┘
-         │                       │
-         ▼                       ▼
-   localStorage            URL hash (secret)
+┌─────────────────┐     ┌──────────────────┐     ┌──────────────┐     ┌─────────────┐
+│  AudioPlayer    │────▶│  NostrSyncPanel  │────▶│  useNostrSync│────▶│ Nostr Relays│
+│  (history state)│◀────│  (orchestration) │◀────│  (sync logic)│◀────│ (storage)   │
+└─────────────────┘     └──────────────────┘     └──────────────┘     └─────────────┘
+         │                       │                      │
+         ▼                       ▼                      ▼
+   localStorage           useNostrSession      Subscription (real-time)
+                          (session state)      + Live position updates
 ```
+
+**Sync ordering**: Events are ordered by embedded millisecond timestamps in the encrypted payload (`HistoryPayload.timestamp`), not by Nostr event `created_at` (which has only second precision). This ensures reliable ordering even with rapid updates.
 
 ### Session Takeover Flow
 
@@ -94,7 +118,7 @@ User Action → AudioPlayer → saveCurrentPosition() → localStorage
 
 ### history.ts
 
-Local persistence layer using localStorage.
+History types and payload validation.
 
 ```typescript
 interface HistoryEntry {
@@ -103,10 +127,17 @@ interface HistoryEntry {
   position: number;     // Playback position in seconds
   gain?: number;        // Optional volume boost level
 }
+
+interface HistoryPayload {
+  history: HistoryEntry[];  // Array of history entries
+  timestamp: number;        // Date.now() milliseconds for ordering
+  sessionId?: string;       // Session ID of the publisher
+}
 ```
 
 - `getHistory()`: Retrieves validated history from localStorage
 - `saveHistory()`: Persists history with timestamp for cross-tab sync
+- `validateHistoryPayload()`: Validates and normalizes payload from Nostr events
 - Max 100 entries (trimmed on save)
 
 ### nostr-sync.ts
@@ -114,10 +145,7 @@ interface HistoryEntry {
 Nostr protocol integration for cloud sync.
 
 **Relays used:**
-- wss://relay.damus.io
-- wss://relay.primal.net
-- wss://relay.nostr.band
-- wss://nos.lol
+...
 
 **Event structure (NIP-78):**
 - Kind: 30078 (application-specific replaceable)
@@ -131,18 +159,20 @@ Nostr protocol integration for cloud sync.
 - Publish-time collision checks: if an existing event contains the same session tag, regenerate and republish.
 - Optional per-URL or per-user namespace prefix to avoid cross-URL collisions.
 
-**Stale-session detection (roadmap)**
-- Emit a heartbeat every 30s.
-- Mark sessions inactive after 2 minutes without heartbeat.
-- Periodic reconciler every 30–60s that prefers active sessions.
-- Takeover requires explicit user confirmation if a different active session is detected.
-- All intervals/timeouts configurable in one place.
+**Stale-session detection**
+- ✅ **Current:** Real-time subscription detects remote session activity via `HistoryPayload.sessionId`. When a remote event with a different sessionId arrives, the local session transitions to `stale` status.
+- ✅ **Takeover grace period:** After taking over a session, remote events are ignored for a configurable grace period (`ignoreRemoteUntil`) to prevent immediate re-staling from delayed events.
+- ✅ **Live position sync:** Active sessions publish position updates every 5s during playback, allowing slave devices to track playback position.
+- ⚠️ **Roadmap:** Heartbeat-based inactive detection (mark sessions inactive after N minutes without updates).
 
 **Key functions:**
-- `saveHistoryToNostr()`: Encrypts and publishes history
-- `loadHistoryFromNostr()`: Fetches and decrypts latest history
-- `subscribeToHistory()`: Real-time subscription for session changes
+- `saveHistoryToNostr()`: Encrypts and publishes history with embedded timestamp and sessionId
+- `loadHistoryFromNostr()`: Fetches and decrypts latest history, returns `HistoryPayload`
+- `subscribeToHistory()`: Real-time subscription for session changes (basic callback)
+- `subscribeToHistoryDetailed()`: Real-time subscription returning full `HistoryPayload` for timestamp ordering
 - `mergeHistory()`: Combines local and cloud history with conflict resolution
+- `parseAndValidateEventContent()`: Validates Nostr event content structure
+- `canSetOnError()`: Type guard for error handler assignment
 
 ### nostr-crypto.ts
 
@@ -151,11 +181,13 @@ Cryptographic utilities for secure sync.
 **Key derivation:**
 - User secret (URL hash) → HKDF-SHA256 with salt → secp256k1 keypair
 - Secret is 96-bit random, URL-safe Base64 encoded
+- `deriveNostrKeys(secret, signal?)`: Async key derivation with optional abort signal
 
 **Encryption (NIP-44):**
 - Ephemeral keypair per encryption
 - ECDH shared secret → ChaCha20-Poly1305
-- Ciphertext stored in Nostr event content
+- `encryptHistory(data, publicKey, sessionId?)`: Encrypts history with embedded `HistoryPayload` (includes `timestamp: Date.now()` and optional `sessionId`)
+- `decryptHistory(ciphertext, ephemeralPubKey, privateKey)`: Returns full `HistoryPayload` with timestamp for ordering
 
 ## Security Model
 

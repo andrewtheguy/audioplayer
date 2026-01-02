@@ -4,8 +4,9 @@ import {
   loadHistoryFromNostr,
   mergeHistory,
   saveHistoryToNostr,
+  subscribeToHistoryDetailed,
 } from "@/lib/nostr-sync";
-import type { HistoryEntry } from "@/lib/history";
+import type { HistoryEntry, HistoryPayload } from "@/lib/history";
 import type { SessionStatus } from "@/hooks/useNostrSession";
 
 type SyncStatus = "idle" | "saving" | "loading" | "success" | "error";
@@ -25,9 +26,13 @@ interface UseNostrSyncOptions {
   setSessionNotice: (notice: string | null) => void;
   clearSessionNotice: () => void;
   startTakeoverGrace: () => void;
+  ignoreRemoteUntil: number; // Grace period timestamp from useNostrSession
   onHistoryLoaded: (merged: HistoryEntry[]) => void;
   onTakeOver?: (remoteHistory: HistoryEntry[]) => void;
+  onRemoteSync?: (remoteHistory: HistoryEntry[]) => void;
+  isPlayingRef?: React.RefObject<boolean>; // For frequent position updates during playback
   debounceSaveMs?: number;
+  positionSaveIntervalMs?: number; // Interval for live position updates (default 1500ms)
   operationTimeoutMs?: number;
 }
 
@@ -41,10 +46,15 @@ interface UseNostrSyncResult {
     historyToSave: HistoryEntry[],
     options?: { allowStale?: boolean }
   ) => Promise<boolean>;
-  performLoad: (currentSecret: string, isTakeOver?: boolean) => Promise<void>;
+  performLoad: (
+    currentSecret: string,
+    isTakeOver?: boolean,
+    options?: { followRemote?: boolean; silent?: boolean }
+  ) => Promise<void>;
 }
 
 const DEFAULT_DEBOUNCE_SAVE_MS = 5000;
+const DEFAULT_POSITION_SAVE_INTERVAL_MS = 5000; // Live position updates every 5s
 const DEFAULT_OPERATION_TIMEOUT_MS = 30000;
 
 class TimeoutError extends Error {
@@ -97,9 +107,13 @@ export function useNostrSync({
   setSessionNotice,
   clearSessionNotice,
   startTakeoverGrace,
+  ignoreRemoteUntil,
   onHistoryLoaded,
   onTakeOver,
+  onRemoteSync,
+  isPlayingRef,
   debounceSaveMs = DEFAULT_DEBOUNCE_SAVE_MS,
+  positionSaveIntervalMs = DEFAULT_POSITION_SAVE_INTERVAL_MS,
   operationTimeoutMs = DEFAULT_OPERATION_TIMEOUT_MS,
 }: UseNostrSyncOptions): UseNostrSyncResult {
   const [status, setStatus] = useState<SyncStatus>("idle");
@@ -110,6 +124,7 @@ export function useNostrSync({
   const historyRef = useRef(history);
   const onHistoryLoadedRef = useRef(onHistoryLoaded);
   const onTakeOverRef = useRef(onTakeOver);
+  const onRemoteSyncRef = useRef(onRemoteSync);
   const sessionStatusRef = useRef(sessionStatus);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipNextDirtyRef = useRef(false);
@@ -117,8 +132,18 @@ export function useNostrSync({
   const mountedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const performLoadRef = useRef<
-    ((currentSecret: string, isTakeOver?: boolean) => Promise<void>) | null
+    ((
+      currentSecret: string,
+      isTakeOver?: boolean,
+      options?: { followRemote?: boolean; silent?: boolean }
+    ) => Promise<void>) | null
   >(null);
+
+  // NostrPad-style refs for reliable syncing
+  const latestTimestampRef = useRef<number>(0); // Milliseconds from payload
+  const isLocalChangeRef = useRef<boolean>(false); // Protect local changes during sync
+  const pendingPublishRef = useRef<boolean>(false); // Prevent duplicate publishes
+  const ignoreRemoteUntilRef = useRef<number>(ignoreRemoteUntil);
 
   const isActive = useCallback(
     () => mountedRef.current && !abortRef.current?.signal.aborted,
@@ -141,8 +166,16 @@ export function useNostrSync({
   }, [history, onHistoryLoaded, onTakeOver]);
 
   useEffect(() => {
+    onRemoteSyncRef.current = onRemoteSync;
+  }, [onRemoteSync]);
+
+  useEffect(() => {
     sessionStatusRef.current = sessionStatus;
   }, [sessionStatus]);
+
+  useEffect(() => {
+    ignoreRemoteUntilRef.current = ignoreRemoteUntil;
+  }, [ignoreRemoteUntil]);
 
   useEffect(() => {
     if (!hasMountedRef.current) {
@@ -160,9 +193,10 @@ export function useNostrSync({
     async (
       currentSecret: string,
       historyToSave: HistoryEntry[],
-      options?: { allowStale?: boolean }
+      options?: { allowStale?: boolean; silent?: boolean }
     ) => {
       if (!currentSecret || !isActive()) return false;
+      if (pendingPublishRef.current) return false; // Prevent duplicate publishes
       const signal = abortRef.current?.signal;
       if (signal?.aborted) return false;
 
@@ -174,6 +208,8 @@ export function useNostrSync({
         return false;
       }
 
+      pendingPublishRef.current = true;
+
       try {
         const keys = await withTimeout(
           deriveNostrKeys(currentSecret, signal),
@@ -184,7 +220,9 @@ export function useNostrSync({
           console.warn("Session became stale before save. Ignoring.");
           return false;
         }
-        setStatus("saving");
+        if (!options?.silent) {
+          setStatus("saving");
+        }
         await withTimeout(
           saveHistoryToNostr(
             historyToSave,
@@ -196,6 +234,10 @@ export function useNostrSync({
           operationTimeoutMs
         );
         if (!isActive()) return false;
+
+        // Update our timestamp ref to the time we just published
+        latestTimestampRef.current = Date.now();
+
         const fingerprint = await getSecretFingerprint(currentSecret);
         if (!isActive()) return false;
         setLastOperation({
@@ -203,19 +245,26 @@ export function useNostrSync({
           fingerprint,
           timestamp: formatTimestamp(new Date()),
         });
-        setStatus("success");
-        setMessage(`Saved ${historyToSave.length} entries`);
+        if (!options?.silent) {
+          setStatus("success");
+          setMessage(`Saved ${historyToSave.length} entries`);
+        }
         dirtyRef.current = false;
         return true;
       } catch (err) {
         if (!isActive()) return false;
-        setStatus("error");
-        if (err instanceof TimeoutError) {
-          setMessage("Save timed out. Check connection.");
-        } else {
-          setMessage(err instanceof Error ? err.message : "Failed to save");
+        if (!options?.silent) {
+          setStatus("error");
+          if (err instanceof TimeoutError) {
+            setMessage("Save timed out. Check connection.");
+          } else {
+            setMessage(err instanceof Error ? err.message : "Failed to save");
+          }
         }
         return false;
+      } finally {
+        isLocalChangeRef.current = false;
+        pendingPublishRef.current = false;
       }
     },
     [isActive, localSessionId, operationTimeoutMs]
@@ -237,15 +286,18 @@ export function useNostrSync({
   }, [isActive, setSessionNotice, setSessionStatus]);
 
   const mergeAndNotify = useCallback(
-    (cloudHistory: HistoryEntry[], isTakeOver: boolean) => {
+    (cloudHistory: HistoryEntry[], isTakeOver: boolean, followRemote: boolean) => {
       const result = mergeHistory(historyRef.current, cloudHistory, {
-        preferRemote: isTakeOver,
-        preferRemoteOrder: isTakeOver,
+        preferRemote: isTakeOver || followRemote,
+        preferRemoteOrder: isTakeOver || followRemote,
       });
       skipNextDirtyRef.current = true;
       onHistoryLoadedRef.current(result.merged);
       if (isTakeOver) {
         onTakeOverRef.current?.(cloudHistory);
+      }
+      if (followRemote) {
+        onRemoteSyncRef.current?.(result.merged);
       }
       return result;
     },
@@ -285,13 +337,21 @@ export function useNostrSync({
   );
 
   const performLoad = useCallback(
-    async (currentSecret: string, isTakeOver = false) => {
+    async (
+      currentSecret: string,
+      isTakeOver = false,
+      options?: { followRemote?: boolean; silent?: boolean }
+    ) => {
       if (!currentSecret || !isActive()) return;
       const signal = abortRef.current?.signal;
       if (signal?.aborted) return;
 
-      setStatus("loading");
-      setMessage("Syncing...");
+      const followRemote = options?.followRemote === true;
+      const silent = options?.silent === true;
+      if (!silent) {
+        setStatus("loading");
+        setMessage("Syncing...");
+      }
       if (isTakeOver) {
         startTakeoverGrace();
       }
@@ -317,7 +377,13 @@ export function useNostrSync({
         });
 
         if (cloudData) {
-          const { history: cloudHistory, sessionId: remoteSid } = cloudData;
+          const { history: cloudHistory, sessionId: remoteSid, timestamp } = cloudData;
+          // Use payload timestamp (milliseconds) for ordering
+          if (timestamp > latestTimestampRef.current) {
+            latestTimestampRef.current = timestamp;
+          } else if (followRemote) {
+            return;
+          }
 
           const isStaleRemote = detectStaleSession(
             isTakeOver,
@@ -328,7 +394,7 @@ export function useNostrSync({
             handleStaleSession();
           }
 
-          const result = mergeAndNotify(cloudHistory, isTakeOver);
+          const result = mergeAndNotify(cloudHistory, isTakeOver, followRemote);
           if (!isActive()) return;
           updateSessionStateAndMaybeSave(
             currentSecret,
@@ -339,20 +405,26 @@ export function useNostrSync({
           );
         } else {
           if (!isActive()) return;
-          setStatus("success");
+          if (!silent) {
+            setStatus("success");
+          }
           setSessionStatus("active");
           clearSessionNotice();
-          setMessage("Session started (new)");
+          if (!silent) {
+            setMessage("Session started (new)");
+          }
           dirtyRef.current = false;
           void performSave(currentSecret, historyRef.current, { allowStale: true });
         }
       } catch (err) {
         if (!isActive()) return;
-        setStatus("error");
-        if (err instanceof TimeoutError) {
-          setMessage("Load timed out. Check your connection and try again.");
-        } else {
-          setMessage(err instanceof Error ? err.message : "Failed to load");
+        if (!silent) {
+          setStatus("error");
+          if (err instanceof TimeoutError) {
+            setMessage("Load timed out. Check your connection and try again.");
+          } else {
+            setMessage(err instanceof Error ? err.message : "Failed to load");
+          }
         }
       }
     },
@@ -380,6 +452,84 @@ export function useNostrSync({
     void performLoadRef.current?.(secret);
   }, [secret]);
 
+  // NostrPad-style event handler for subscription
+  const handleRemoteEvent = useCallback(
+    (payload: HistoryPayload) => {
+      // Skip if this is our own session
+      if (payload.sessionId && payload.sessionId === localSessionId) return;
+
+      // Skip if older than what we have (timestamp-based ordering)
+      if (payload.timestamp <= latestTimestampRef.current) return;
+
+      // Always update timestamp ref to track newest seen timestamp, even if skipped
+      latestTimestampRef.current = payload.timestamp;
+
+      // Check grace period - ignore remote events during takeover grace
+      if (Date.now() < ignoreRemoteUntilRef.current) return;
+
+      // Check for session takeover
+      if (payload.sessionId && payload.sessionId !== localSessionId) {
+        if (sessionStatusRef.current !== "stale") {
+          setSessionStatus("stale");
+          setSessionNotice(
+            "Another session is active — viewing in read-only mode. Take over to edit."
+          );
+        }
+      }
+
+      // Don't overwrite local changes in progress
+      if (!isLocalChangeRef.current) {
+        skipNextDirtyRef.current = true;
+        onHistoryLoadedRef.current(payload.history);
+        if (sessionStatusRef.current === "stale") {
+          onRemoteSyncRef.current?.(payload.history);
+        }
+      }
+    },
+    [localSessionId, setSessionNotice, setSessionStatus]
+  );
+
+  useEffect(() => {
+    if (!secret) return;
+    let cancelled = false;
+
+    const setupSubscription = async () => {
+      const keys = await withTimeout(
+        deriveNostrKeys(secret),
+        operationTimeoutMs
+      );
+      if (cancelled) return null;
+      const cleanup = subscribeToHistoryDetailed(
+        keys.publicKey,
+        keys.privateKey,
+        (payload) => {
+          if (cancelled) return;
+          handleRemoteEvent(payload);
+        }
+      );
+      return cleanup;
+    };
+
+    const cleanupPromise = setupSubscription().catch((err) => {
+      if (!cancelled) {
+        console.error("Failed to setup sync subscription:", err);
+      }
+      return null;
+    });
+
+    return () => {
+      cancelled = true;
+      void cleanupPromise
+        .then((cleanup) => {
+          if (cleanup) cleanup();
+        })
+        .catch(() => {
+          // Ignore subscription setup failures on teardown.
+        });
+    };
+  }, [secret, handleRemoteEvent, operationTimeoutMs]);
+
+  // Auto-save when history changes (debounced)
   useEffect(() => {
     if (!secret || sessionStatus !== "active" || !dirtyRef.current) return;
 
@@ -395,6 +545,23 @@ export function useNostrSync({
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     };
   }, [history, secret, sessionStatus, performSave, debounceSaveMs]);
+
+  // Frequent position updates during active playback (for live sync to slaves)
+  useEffect(() => {
+    if (!secret || sessionStatus !== "active") return;
+    if (!isPlayingRef) return;
+
+    const intervalId = window.setInterval(() => {
+      if (isPlayingRef.current && !pendingPublishRef.current) {
+        isLocalChangeRef.current = true;
+        void performSave(secret, historyRef.current, { silent: true });
+      }
+    }, positionSaveIntervalMs);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [secret, sessionStatus, isPlayingRef, positionSaveIntervalMs, performSave]);
 
   return {
     status: secret ? status : "idle",

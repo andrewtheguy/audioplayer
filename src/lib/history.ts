@@ -10,6 +10,12 @@ export interface HistoryEntry {
   gain?: number;
 }
 
+export interface HistoryPayload {
+  history: HistoryEntry[];
+  timestamp: number; // Date.now() milliseconds
+  sessionId?: string;
+}
+
 /**
  * Validate that a value is a valid HistoryEntry
  */

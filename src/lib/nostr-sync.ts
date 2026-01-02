@@ -1,12 +1,12 @@
 import { finalizeEvent } from "nostr-tools/pure";
 import { SimplePool } from "nostr-tools/pool";
-import type { HistoryEntry } from "./history";
+import type { HistoryEntry, HistoryPayload } from "./history";
 import { encryptHistory, decryptHistory } from "./nostr-crypto";
 
 export const RELAYS = [
   "wss://relay.damus.io",
   "wss://relay.primal.net",
-  "wss://relay.nostr.band",
+  //"wss://relay.nostr.band",
   "wss://nos.lol",
 ];
 
@@ -34,12 +34,17 @@ if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", closePool);
 }
 
+/** Validated payload structure from a Nostr event */
+interface ValidatedPayload {
+  v: number;
+  ephemeralPubKey: string;
+  ciphertext: string;
+}
+
 /**
  * Validate the encrypted payload structure from a Nostr event
  */
-function isValidPayload(
-  value: unknown
-): value is { v: number; ephemeralPubKey: string; ciphertext: string } {
+function isValidPayload(value: unknown): value is ValidatedPayload {
   if (typeof value !== "object" || value === null) return false;
   const obj = value as Record<string, unknown>;
   return (
@@ -47,6 +52,38 @@ function isValidPayload(
     typeof obj.ephemeralPubKey === "string" &&
     typeof obj.ciphertext === "string"
   );
+}
+
+/**
+ * Parse and validate event content JSON
+ * Throws with descriptive error messages for catch blocks
+ */
+function parseAndValidateEventContent(content: string): ValidatedPayload {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(content);
+  } catch {
+    throw new Error("Event content is not valid JSON. Data may be corrupted.");
+  }
+
+  if (!isValidPayload(payload)) {
+    throw new Error(
+      "Invalid payload structure: missing or invalid ephemeralPubKey/ciphertext fields"
+    );
+  }
+
+  return payload;
+}
+
+/**
+ * Type guard for checking if subscription supports onerror handler
+ */
+function canSetOnError(
+  value: unknown
+): value is { onerror?: (err: unknown) => void } {
+  if (!value || typeof value !== "object") return false;
+  const maybe = value as { onerror?: unknown };
+  return typeof maybe.onerror === "undefined" || typeof maybe.onerror === "function";
 }
 
 /**
@@ -61,7 +98,8 @@ export async function saveHistoryToNostr(
   signal?: AbortSignal
 ): Promise<void> {
   throwIfAborted(signal);
-  const { ciphertext, ephemeralPubKey } = encryptHistory(history, userPublicKey);
+  // sessionId and timestamp are now embedded in the encrypted payload
+  const { ciphertext, ephemeralPubKey } = encryptHistory(history, userPublicKey, sessionId);
 
   const payload = JSON.stringify({
     v: 1,
@@ -73,9 +111,6 @@ export async function saveHistoryToNostr(
     ["d", D_TAG],
     ["client", "audioplayer"],
   ];
-  if (sessionId) {
-    tags.push(["session", sessionId]);
-  }
 
   const event = finalizeEvent(
     {
@@ -89,7 +124,15 @@ export async function saveHistoryToNostr(
 
   try {
     throwIfAborted(signal);
-    await Promise.any(pool.publish(RELAYS, event));
+    const publishPromises = pool.publish(RELAYS, event).map((promise, index) =>
+      promise.catch((err) => {
+        const relay = RELAYS[index] ?? "unknown relay";
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[nostr] publish failed on ${relay}: ${message}`);
+        throw err;
+      })
+    );
+    await Promise.any(publishPromises);
     throwIfAborted(signal);
   } catch (err) {
     // Promise.any throws AggregateError when all promises reject
@@ -107,12 +150,13 @@ export async function saveHistoryToNostr(
 
 /**
  * Load and decrypt history from Nostr relays
+ * Returns HistoryPayload with embedded timestamp and sessionId
  */
 export async function loadHistoryFromNostr(
   userPrivateKey: Uint8Array,
   userPublicKey: string,
   signal?: AbortSignal
-): Promise<{ history: HistoryEntry[]; sessionId: string | null } | null> {
+): Promise<HistoryPayload | null> {
   throwIfAborted(signal);
   const events = await pool.querySync(
     RELAYS,
@@ -132,31 +176,14 @@ export async function loadHistoryFromNostr(
   // Get most recent event
   const latest = events.sort((a, b) => b.created_at - a.created_at)[0];
 
-  // Extract session ID from tags
-  const sessionTag = latest.tags.find((t) => t[0] === "session");
-  const sessionId = sessionTag ? sessionTag[1] : null;
+  const payload = parseAndValidateEventContent(latest.content);
 
-  // Parse and validate payload structure
-  let payload: unknown;
-  try {
-    payload = JSON.parse(latest.content);
-  } catch {
-    throw new Error("Event content is not valid JSON. Data may be corrupted.");
-  }
-
-  if (!isValidPayload(payload)) {
-    throw new Error(
-      "Invalid payload structure: missing or invalid ephemeralPubKey/ciphertext fields"
-    );
-  }
-
-  // Decrypt with validated payload
-  const history = decryptHistory(
+  // Decrypt returns HistoryPayload with timestamp and sessionId
+  return decryptHistory(
     payload.ciphertext,
     payload.ephemeralPubKey,
     userPrivateKey
   );
-  return { history, sessionId };
 }
 
 /**
@@ -167,14 +194,6 @@ export function subscribeToHistory(
   userPublicKey: string,
   onEvent: (sessionId: string | null) => void
 ): () => void {
-  const canSetOnError = (
-    value: unknown
-  ): value is { onerror?: (err: unknown) => void } => {
-    if (!value || typeof value !== "object") return false;
-    const maybe = value as { onerror?: unknown };
-    return typeof maybe.onerror === "undefined" || typeof maybe.onerror === "function";
-  };
-
   try {
     const sub = pool.subscribeMany(
       RELAYS,
@@ -188,6 +207,58 @@ export function subscribeToHistory(
           try {
             const sessionTag = event.tags.find((t) => t[0] === "session");
             onEvent(sessionTag ? sessionTag[1] : null);
+          } catch (err) {
+            console.error("Nostr history event handler failed:", err);
+          }
+        },
+      }
+    );
+
+    if (canSetOnError(sub)) {
+      sub.onerror = (err) => {
+        console.error("Nostr history subscription error:", err);
+      };
+    }
+
+    return () => {
+      sub.close();
+    };
+  } catch (err) {
+    console.error("Failed to subscribe to Nostr history:", err);
+    return () => {};
+  }
+}
+
+/**
+ * Subscribe to history updates with full payload decryption
+ * Returns HistoryPayload with embedded timestamp and sessionId
+ */
+export function subscribeToHistoryDetailed(
+  userPublicKey: string,
+  userPrivateKey: Uint8Array,
+  onEvent: (payload: HistoryPayload) => void
+): () => void {
+  try {
+    const sub = pool.subscribeMany(
+      RELAYS,
+      {
+        kinds: [KIND_HISTORY],
+        authors: [userPublicKey],
+        "#d": [D_TAG],
+      },
+      {
+        onevent: (event) => {
+          try {
+            const payload = parseAndValidateEventContent(event.content);
+
+            // decryptHistory returns HistoryPayload with timestamp and sessionId
+            const historyPayload = decryptHistory(
+              payload.ciphertext,
+              payload.ephemeralPubKey,
+              userPrivateKey
+            );
+
+            onEvent(historyPayload);
           } catch (err) {
             console.error("Nostr history event handler failed:", err);
           }

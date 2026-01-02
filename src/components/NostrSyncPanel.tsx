@@ -15,7 +15,9 @@ interface NostrSyncPanelProps {
   onHistoryLoaded: (merged: HistoryEntry[]) => void;
   onSessionStatusChange?: (status: SessionStatus) => void;
   onTakeOver?: (remoteHistory: HistoryEntry[]) => void;
+  onRemoteSync?: (remoteHistory: HistoryEntry[]) => void;
   sessionId?: string;
+  isPlayingRef?: React.RefObject<boolean>; // For frequent position updates during playback
 }
 
 export function NostrSyncPanel({
@@ -23,7 +25,9 @@ export function NostrSyncPanel({
   onHistoryLoaded,
   onSessionStatusChange,
   onTakeOver,
+  onRemoteSync,
   sessionId,
+  isPlayingRef,
 }: NostrSyncPanelProps) {
   const [showDetails, setShowDetails] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -32,6 +36,7 @@ export function NostrSyncPanel({
     sessionStatus,
     sessionNotice,
     localSessionId,
+    ignoreRemoteUntil,
     setSessionStatus,
     setSessionNotice,
     clearSessionNotice,
@@ -47,8 +52,11 @@ export function NostrSyncPanel({
       setSessionNotice,
       clearSessionNotice,
       startTakeoverGrace,
+      ignoreRemoteUntil,
       onHistoryLoaded,
       onTakeOver,
+      onRemoteSync,
+      isPlayingRef,
     });
 
   const messageRef = useRef<string | null>(null);
