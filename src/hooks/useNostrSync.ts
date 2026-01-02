@@ -54,7 +54,7 @@ interface UseNostrSyncResult {
 }
 
 const DEFAULT_DEBOUNCE_SAVE_MS = 5000;
-const DEFAULT_POSITION_SAVE_INTERVAL_MS = 1500; // Live position updates every 1.5s
+const DEFAULT_POSITION_SAVE_INTERVAL_MS = 5000; // Live position updates every 5s
 const DEFAULT_OPERATION_TIMEOUT_MS = 30000;
 
 class TimeoutError extends Error {
