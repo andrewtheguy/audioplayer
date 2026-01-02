@@ -731,12 +731,9 @@ function AudioPlayerInner({
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onCanPlay={applyPendingSeek}
-        onCanPlayThrough={applyPendingSeek}
         onPlay={() => {
           setIsPlaying(true);
-          applyPendingSeek();
         }}
-        onPlaying={applyPendingSeek}
         onSeeked={handleSeeked}
         onPause={handlePause}
         onEnded={() => setIsPlaying(false)}
