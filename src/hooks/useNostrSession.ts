@@ -74,8 +74,6 @@ export function useNostrSession({
   }, [onSessionStatusChange]);
 
   useEffect(() => {
-    if (sessionStatus === "unknown") return;
-
     // Save secret to localStorage when session becomes active
     if (sessionStatus === "active" && secret) {
       saveSessionSecret(secret);

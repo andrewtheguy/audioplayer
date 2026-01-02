@@ -162,7 +162,7 @@ export function NostrSyncPanel({
       {!secret ? (
         <div className="space-y-2">
           <div className="text-xs text-muted-foreground">
-            Viewing mode. Start or resume a session to enable editing.
+            View only. Start or resume a session to enable playback.
           </div>
           <Button
             size="sm"
