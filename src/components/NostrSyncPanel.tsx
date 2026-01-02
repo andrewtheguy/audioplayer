@@ -1,15 +1,14 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { deriveNostrKeys, generateSecret } from "@/lib/pin-crypto";
-import {
-  saveHistoryToNostr,
-  loadHistoryFromNostr,
-  mergeHistory,
-  subscribeToHistory,
-  RELAYS,
-} from "@/lib/nostr-sync";
+import { generateSecret } from "@/lib/pin-crypto";
+import { RELAYS } from "@/lib/nostr-sync";
 import type { HistoryEntry } from "@/lib/history";
 import { cn } from "@/lib/utils";
+import {
+  useNostrSession,
+  type SessionStatus,
+} from "@/hooks/useNostrSession";
+import { useNostrSync } from "@/hooks/useNostrSync";
 
 interface NostrSyncPanelProps {
   history: HistoryEntry[];
@@ -19,87 +18,6 @@ interface NostrSyncPanelProps {
   sessionId?: string;
 }
 
-type SyncStatus = "idle" | "saving" | "loading" | "success" | "error";
-type SessionStatus = "unclaimed" | "active" | "stale" | "unknown";
-
-interface LastOperation {
-  type: "saved" | "loaded";
-  fingerprint: string;
-  timestamp: string;
-}
-
-/**
- * Generate a fingerprint from secret using SHA256 hash prefix.
- * Returns first 8 hex characters formatted as xxxx-xxxx.
- */
-async function getSecretFingerprint(secret: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(secret);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("")
-    .toUpperCase();
-  return `${hashHex.slice(0, 4)}-${hashHex.slice(4, 8)}`;
-}
-
-/**
- * Format timestamp for display with date and time
- */
-function formatTimestamp(date: Date): string {
-  return date.toLocaleString([], {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-const OPERATION_TIMEOUT_MS = 30000; // 30 seconds
-const DEBOUNCE_SAVE_MS = 5000; // 5 seconds auto-save debounce
-const TAKEOVER_GRACE_MS = 15000; // 15 seconds grace to let takeover settle
-const SESSION_POLL_MS = 6000; // 6 seconds polling for session changes
-
-class TimeoutError extends Error {
-  constructor(message = "Operation timed out") {
-    super(message);
-    this.name = "TimeoutError";
-  }
-}
-
-/**
- * Wrap a promise with a timeout. Rejects with TimeoutError if not resolved in time.
- */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      reject(new TimeoutError(`Operation timed out after ${ms / 1000}s`));
-    }, ms);
-
-    promise
-      .then((result) => {
-        clearTimeout(timeoutId);
-        resolve(result);
-      })
-      .catch((err) => {
-        clearTimeout(timeoutId);
-        reject(err);
-      });
-  });
-}
-
-/**
- * Get the secret directly from the URL hash.
- * Removes the '#' prefix if present.
- */
-function getSecretFromHash(): string {
-  if (typeof window === "undefined") return "";
-  const hash = window.location.hash;
-  return hash.startsWith("#") ? hash.slice(1) : hash;
-}
-
 export function NostrSyncPanel({
   history,
   onHistoryLoaded,
@@ -107,322 +25,34 @@ export function NostrSyncPanel({
   onTakeOver,
   sessionId,
 }: NostrSyncPanelProps) {
-  const [secret, setSecret] = useState(getSecretFromHash());
-  const [status, setStatus] = useState<SyncStatus>("idle");
-  const [message, setMessage] = useState<string | null>(null);
-  const [lastOperation, setLastOperation] = useState<LastOperation | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [isDirty, setIsDirty] = useState(false);
+  const {
+    secret,
+    sessionStatus,
+    sessionNotice,
+    localSessionId,
+    setSessionStatus,
+    setSessionNotice,
+    clearSessionNotice,
+    startTakeoverGrace,
+  } = useNostrSession({ sessionId, onSessionStatusChange });
+  const { status, message, lastOperation, setMessage, performSave, performLoad } =
+    useNostrSync({
+      history,
+      secret,
+      localSessionId,
+      sessionStatus,
+      setSessionStatus,
+      setSessionNotice,
+      clearSessionNotice,
+      startTakeoverGrace,
+      onHistoryLoaded,
+      onTakeOver,
+    });
 
-  // Session Management
-  const [localSessionId] = useState(() => sessionId ?? crypto.randomUUID());
-  const [sessionStatus, setSessionStatus] = useState<SessionStatus>("unknown");
-  // const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null);
-
-  // Keep refs for props to ensure performLoad is stable and doesn't trigger effect loops
-  const historyRef = useRef(history);
-  const onHistoryLoadedRef = useRef(onHistoryLoaded);
-  const onTakeOverRef = useRef(onTakeOver);
-  const sessionStatusRef = useRef(sessionStatus);
-  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const ignoreRemoteUntilRef = useRef<number>(0);
-  const skipNextDirtyRef = useRef(false);
-  const hasMountedRef = useRef(false);
-
-  useEffect(() => {
-    historyRef.current = history;
-    onHistoryLoadedRef.current = onHistoryLoaded;
-    onTakeOverRef.current = onTakeOver;
-  }, [history, onHistoryLoaded, onTakeOver]);
-
-  useEffect(() => {
-    sessionStatusRef.current = sessionStatus;
-    onSessionStatusChange?.(sessionStatus);
-  }, [sessionStatus, onSessionStatusChange]);
-
-  useEffect(() => {
-    if (!hasMountedRef.current) {
-      hasMountedRef.current = true;
-      return;
-    }
-    if (skipNextDirtyRef.current) {
-      skipNextDirtyRef.current = false;
-      return;
-    }
-    setIsDirty(true);
-  }, [history]);
-
-  const performSave = useCallback(async (
-      currentSecret: string,
-      historyToSave: HistoryEntry[],
-      options?: { allowStale?: boolean }
-    ) => {
-      if (!currentSecret) return false;
-      
-      // Don't save if we are stale!
-      const shouldBlockSave = () =>
-        sessionStatusRef.current === "stale" && !options?.allowStale;
-
-      if (shouldBlockSave()) {
-          console.warn("Attempted to save while stale. Ignoring.");
-          return false;
-      }
-
-      try {
-        const keys = await withTimeout(
-          deriveNostrKeys(currentSecret),
-          OPERATION_TIMEOUT_MS
-        );
-        if (shouldBlockSave()) {
-          console.warn("Session became stale before save. Ignoring.");
-          return false;
-        }
-        setStatus("saving");
-        // Only show "Saving..." if manual? For auto-save maybe subtle?
-        // For now let's show it.
-        await withTimeout(
-          saveHistoryToNostr(historyToSave, keys.privateKey, keys.publicKey, localSessionId),
-          OPERATION_TIMEOUT_MS
-        );
-        const fingerprint = await getSecretFingerprint(currentSecret);
-        setLastOperation({
-          type: "saved",
-          fingerprint,
-          timestamp: formatTimestamp(new Date()),
-        });
-        setStatus("success");
-        setMessage(`Saved ${historyToSave.length} entries`);
-        setIsDirty(false);
-        return true;
-      } catch (err) {
-        setStatus("error");
-        if (err instanceof TimeoutError) {
-          setMessage("Save timed out. Check connection.");
-        } else {
-          setMessage(err instanceof Error ? err.message : "Failed to save");
-        }
-        return false;
-      }
-  }, [localSessionId]);
-
-  // Load logic extracted to be reusable
-  const performLoad = useCallback(async (currentSecret: string, isTakeOver = false) => {
-    if (!currentSecret) return;
-
-    setStatus("loading");
-    setMessage("Syncing...");
-    if (isTakeOver) {
-      ignoreRemoteUntilRef.current = Date.now() + TAKEOVER_GRACE_MS;
-    }
-
-    try {
-      const keys = await withTimeout(
-        deriveNostrKeys(currentSecret),
-        OPERATION_TIMEOUT_MS
-      );
-      const cloudData = await withTimeout(
-        loadHistoryFromNostr(keys.privateKey, keys.publicKey),
-        OPERATION_TIMEOUT_MS
-      );
-
-      const fingerprint = await getSecretFingerprint(currentSecret);
-      setLastOperation({
-        type: "loaded",
-        fingerprint,
-        timestamp: formatTimestamp(new Date()),
-      });
-
-      if (cloudData) {
-        const { history: cloudHistory, sessionId: remoteSid } = cloudData;
-        
-        // If we are just checking (initial load), logic is different from "Take Over"
-        const isStaleRemote =
-          !isTakeOver && remoteSid && remoteSid !== localSessionId;
-        if (isStaleRemote) {
-          setSessionStatus("stale");
-          setStatus("success");
-          setMessage(
-            "Another session is active — viewing in read-only mode. Take over to edit."
-          );
-        }
-
-        // Use refs to get latest values
-        const result = mergeHistory(historyRef.current, cloudHistory, {
-          preferRemote: isTakeOver,
-          preferRemoteOrder: isTakeOver,
-        });
-        skipNextDirtyRef.current = true;
-        onHistoryLoadedRef.current(result.merged);
-        if (isTakeOver) {
-          onTakeOverRef.current?.(cloudHistory);
-        }
-        
-        setStatus("success");
-        setIsDirty(false);
-        if (!isStaleRemote) {
-          setMessage(
-            result.addedFromCloud > 0
-              ? `Added ${result.addedFromCloud} entries from cloud`
-              : "History is up to date"
-          );
-        }
-        
-        // If taking over or new/matching session, become active
-        if (isTakeOver || !remoteSid || remoteSid === localSessionId) {
-             setSessionStatus("active");
-             // Force save to claim session if taking over or if new
-             if (isTakeOver || !remoteSid) {
-                  // Wait a tick for merge to settle? No, we have merged result.
-                  // Save merged history immediately to claim session
-                  performSave(currentSecret, result.merged, { allowStale: isTakeOver });
-             }
-        }
-
-      } else {
-        // No history found -> we claim it
-        setStatus("success");
-        setSessionStatus("active");
-        setMessage("Session started (new)");
-        setIsDirty(false);
-        // Save initial empty/current state to claim
-        performSave(currentSecret, historyRef.current, { allowStale: true });
-      }
-    } catch (err) {
-      setStatus("error");
-      if (err instanceof TimeoutError) {
-        setMessage("Load timed out. Check your connection and try again.");
-      } else {
-        setMessage(err instanceof Error ? err.message : "Failed to load");
-      }
-    }
-  }, [localSessionId, performSave]); // Stable dependency
-
-  // Subscription for "Stale" detection
-  useEffect(() => {
-    if (!secret) return;
-    
-    const setupSubscription = async () => {
-        const keys = await deriveNostrKeys(secret);
-        if (cancelled) return null;
-        const cleanup = subscribeToHistory(keys.publicKey, (remoteSid) => {
-            if (cancelled) return;
-            // If we see a session ID that is NOT ours, we are stale.
-            if (remoteSid && remoteSid !== localSessionId) {
-                if (Date.now() < ignoreRemoteUntilRef.current) return;
-                setSessionStatus((prev) => {
-                    if (prev !== 'stale') {
-                         setMessage("Session taken over by another device.");
-                         return 'stale';
-                    }
-                    return prev;
-                });
-            } else if (remoteSid === localSessionId) {
-                 // Confirmed active
-                 setSessionStatus('active');
-            }
-        });
-        return cleanup;
-    };
-    
-    let cancelled = false;
-    const cleanupPromise = setupSubscription();
-    
-    return () => {
-        cancelled = true;
-        void cleanupPromise.then((cleanup) => {
-          if (cleanup) cleanup();
-        }).catch(() => {
-          // Ignore subscription setup failures on teardown.
-        });
-    };
-  }, [secret, localSessionId]);
-
-  // Fallback polling to detect session changes if relay subscription misses events
-  useEffect(() => {
-    if (!secret || sessionStatus !== "active") return;
-
-    let cancelled = false;
-    const checkSession = async () => {
-      try {
-        const keys = await deriveNostrKeys(secret);
-        const cloudData = await loadHistoryFromNostr(keys.privateKey, keys.publicKey);
-        if (cancelled || !cloudData?.sessionId) return;
-        if (cloudData.sessionId !== localSessionId) {
-          if (Date.now() < ignoreRemoteUntilRef.current) return;
-          setSessionStatus("stale");
-          setMessage("Session taken over by another device.");
-        }
-      } catch (err) {
-        console.debug("Polling error in NostrSyncPanel:", err);
-        // Ignore polling errors to avoid noisy UI updates
-      }
-    };
-
-    const intervalId = window.setInterval(checkSession, SESSION_POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(intervalId);
-    };
-  }, [secret, sessionStatus, localSessionId]);
-
-  // Sync state with URL hash and auto-load on change
-  useEffect(() => {
-    const handleHashChange = () => {
-      const newSecret = getSecretFromHash();
-      setSecret(newSecret);
-      if (newSecret) {
-        performLoad(newSecret);
-      } else {
-        // Reset state if hash is cleared
-        setStatus("idle");
-        setMessage(null);
-        setLastOperation(null);
-        setSessionStatus("unknown");
-      }
-    };
-
-    window.addEventListener("hashchange", handleHashChange);
-
-    // Initial check on mount
-    const initialSecret = getSecretFromHash();
-    if (initialSecret) {
-      performLoad(initialSecret);
-    }
-
-    return () => {
-      window.removeEventListener("hashchange", handleHashChange);
-    };
-  }, [performLoad]); // performLoad now handles initial load logic
-
-  // Auto-Save Effect
-  useEffect(() => {
-      if (!secret || sessionStatus !== 'active' || !isDirty) return;
-      
-      // If history changes, debounce save
-      if (autoSaveTimerRef.current) {
-          clearTimeout(autoSaveTimerRef.current);
-      }
-      
-      // Only auto-save if we have changes? 
-      // Actually we just save whatever is current state periodically if it changes.
-      // But we need to avoid saving on *load*. 
-      // This effect runs when `history` changes.
-      // `history` changes when we load from cloud too.
-      // So we might auto-save immediately after load?
-      // `performLoad` does a save if it merges/claims.
-      
-      autoSaveTimerRef.current = setTimeout(() => {
-          void performSave(secret, history).then((didSave) => {
-            if (didSave) setIsDirty(false);
-          });
-      }, DEBOUNCE_SAVE_MS);
-      
-      return () => {
-          if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-      };
-  }, [history, secret, sessionStatus, isDirty, performSave]);
-
+  const isLoading = status === "saving" || status === "loading";
+  const displayMessage = sessionNotice ?? message;
 
   const handleGenerate = () => {
     const newSecret = generateSecret();
@@ -440,7 +70,7 @@ export function NostrSyncPanel({
       setTimeout(() => setCopiedLink(false), 2000);
 
       // If we are in success state, keep the message, otherwise show temporary copy feedback
-      if (status !== 'success') {
+      if (status !== "success") {
           setMessage("Link copied to clipboard!");
           // Reset message after delay if it was just the copy confirmation
           setTimeout(() => {
@@ -448,7 +78,9 @@ export function NostrSyncPanel({
               // but here we just want to clear if it hasn't changed to something important.
               // However, since we can't easily check 'current' status inside timeout without refs,
               // we'll just clear if the message is still the copy message.
-              setMessage((prev) => prev === "Link copied to clipboard!" ? null : prev);
+              setMessage((prev) =>
+                prev === "Link copied to clipboard!" ? null : prev
+              );
           }, 3000);
       }
     } catch {
@@ -460,8 +92,6 @@ export function NostrSyncPanel({
       if (!secret) return;
       performLoad(secret, true); // true = force take over
   };
-
-  const isLoading = status === "saving" || status === "loading";
 
   return (
     <div className="border-t pt-3 mt-3 space-y-2">
@@ -524,7 +154,7 @@ export function NostrSyncPanel({
         </div>
       )}
 
-      {message && (
+      {displayMessage && (
         <div
           className={cn("text-xs p-2 rounded-md bg-muted/50 transition-colors", 
             status === "error" && "text-destructive bg-destructive/5 border border-destructive/10",
@@ -532,7 +162,7 @@ export function NostrSyncPanel({
             sessionStatus === 'stale' && "bg-amber-500/10 text-amber-600 border border-amber-500/20"
           )}
         >
-          {message}
+          {displayMessage}
           {status === "success" && lastOperation && lastOperation.type !== 'loaded' && sessionStatus !== 'stale' && (
             <span className="block mt-1 opacity-75 text-[10px]">
               {lastOperation.type === "saved" ? "Saved" : "Loaded"} at {lastOperation.timestamp}
