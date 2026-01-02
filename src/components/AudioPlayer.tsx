@@ -119,6 +119,8 @@ function AudioPlayerInner({
   const [editingTitle, setEditingTitle] = useState("");
   const [showLoadInputs, setShowLoadInputs] = useState(true);
   const shouldShowLoadInputs = !nowPlayingUrl || showLoadInputs;
+  const [isEditingNowPlaying, setIsEditingNowPlaying] = useState(false);
+  const [nowPlayingTitleDraft, setNowPlayingTitleDraft] = useState("");
 
   // Keep refs in sync with state for use in callbacks
   useEffect(() => {
@@ -295,6 +297,8 @@ function AudioPlayerInner({
       setIsLoaded(true);
       setNowPlayingUrl(urlToLoad);
       setNowPlayingTitle(entry.title ?? null);
+      setIsEditingNowPlaying(false);
+      setNowPlayingTitleDraft("");
       setUrl("");
       setShowLoadInputs(false);
     };
@@ -403,6 +407,8 @@ function AudioPlayerInner({
       setIsLoaded(true);
       setNowPlayingUrl(urlToLoad);
       setNowPlayingTitle(resolvedTitle ?? null);
+      setIsEditingNowPlaying(false);
+      setNowPlayingTitleDraft("");
       setUrl("");
       setShowLoadInputs(false);
       // Add to history immediately upon load success
@@ -668,6 +674,35 @@ function AudioPlayerInner({
     cancelTitleEdit();
   };
 
+  const startNowPlayingTitleEdit = () => {
+    setIsEditingNowPlaying(true);
+    setNowPlayingTitleDraft(nowPlayingTitle ?? "");
+  };
+
+  const cancelNowPlayingTitleEdit = () => {
+    setIsEditingNowPlaying(false);
+    setNowPlayingTitleDraft("");
+  };
+
+  const saveNowPlayingTitleEdit = (nextTitle: string) => {
+    if (!nowPlayingUrl) return;
+    const normalized = normalizeTitle(nextTitle);
+    setHistory((prev) => {
+      const existing = prev.find((entry) => entry.url === nowPlayingUrl);
+      if (!existing) return prev;
+      const newHistory = prev.map((entry) =>
+        entry.url === nowPlayingUrl ? { ...entry, title: normalized } : entry
+      );
+      saveHistory(newHistory);
+      return newHistory;
+    });
+    setNowPlayingTitle(normalized ?? null);
+    if (currentUrlRef.current === nowPlayingUrl) {
+      currentTitleRef.current = normalized;
+    }
+    cancelNowPlayingTitleEdit();
+  };
+
   const copyToClipboard = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -818,9 +853,61 @@ function AudioPlayerInner({
         <div className="space-y-1">
           <label className="text-sm font-medium">Now Playing</label>
           <div className="space-y-1">
-            {nowPlayingTitle && (
-              <div className="text-sm font-medium truncate" title={nowPlayingTitle}>
-                {nowPlayingTitle}
+            {isEditingNowPlaying ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  type="text"
+                  value={nowPlayingTitleDraft}
+                  onChange={(e) => setNowPlayingTitleDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      saveNowPlayingTitleEdit(nowPlayingTitleDraft);
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      cancelNowPlayingTitleEdit();
+                    }
+                  }}
+                  placeholder="Add a title"
+                  className="h-7 text-sm"
+                  autoFocus
+                  disabled={isSessionStale}
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => saveNowPlayingTitleEdit(nowPlayingTitleDraft)}
+                  disabled={isSessionStale}
+                  className="h-7 px-2 text-xs"
+                >
+                  Save
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={cancelNowPlayingTitleEdit}
+                  disabled={isSessionStale}
+                  className="h-7 px-2 text-xs text-muted-foreground"
+                >
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="text-sm font-medium truncate flex-1" title={nowPlayingTitle ?? ""}>
+                  {nowPlayingTitle ?? "Untitled"}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={startNowPlayingTitleEdit}
+                  disabled={isSessionStale}
+                  className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+                  title="Edit title"
+                >
+                  <EditIcon className="w-4 h-4" />
+                </Button>
               </div>
             )}
             <div className="flex items-center gap-2">
