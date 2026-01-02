@@ -473,6 +473,7 @@ function AudioPlayerInner({
       return;
     }
     if (pendingSeekAttemptsRef.current >= 20) {
+      console.warn("Seek to saved position failed after max retries");
       pendingSeekPositionRef.current = null;
       seekingToTargetRef.current = false;
       return;
