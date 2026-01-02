@@ -289,10 +289,7 @@ export function useNostrSync({
 
   const mergeAndNotify = useCallback(
     (cloudHistory: HistoryEntry[], isTakeOver: boolean, followRemote: boolean) => {
-      const result = mergeHistory(historyRef.current, cloudHistory, {
-        preferRemote: isTakeOver || followRemote,
-        preferRemoteOrder: isTakeOver || followRemote,
-      });
+      const result = mergeHistory(historyRef.current, cloudHistory);
       skipNextDirtyRef.current = true;
       onHistoryLoadedRef.current(result.merged);
       // Only trigger onTakeOver when transitioning from a non-active state (actual device takeover)
@@ -498,10 +495,7 @@ export function useNostrSync({
             latestTimestampRef.current = timestamp;
           }
           // Merge and display history (read-only, don't claim session)
-          const result = mergeHistory(historyRef.current, cloudHistory, {
-            preferRemote: true,
-            preferRemoteOrder: true,
-          });
+          const result = mergeHistory(historyRef.current, cloudHistory);
           skipNextDirtyRef.current = true;
           onHistoryLoadedRef.current(result.merged);
           setStatus("success");
@@ -578,11 +572,13 @@ export function useNostrSync({
 
       // Don't overwrite local changes in progress
       if (!isLocalChangeRef.current) {
+        // Apply merge to preserve local position when local is newer
+        const result = mergeHistory(historyRef.current, payload.history);
         skipNextDirtyRef.current = true;
-        onHistoryLoadedRef.current(payload.history);
+        onHistoryLoadedRef.current(result.merged);
         // Notify remote sync for both idle and stale devices (read-only viewers)
         if (sessionStatusRef.current === "stale" || sessionStatusRef.current === "idle") {
-          onRemoteSyncRef.current?.(payload.history);
+          onRemoteSyncRef.current?.(result.merged);
         }
       }
     },

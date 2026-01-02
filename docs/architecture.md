@@ -137,10 +137,10 @@ State Transitions:
 | `stale` → `stale` | Remote event arrives | History merged via `onRemoteSync`, remains read-only |
 
 **Timeout/Heartbeat Behavior:**
-- **Not implemented:** No heartbeat or timeout-based stale detection exists.
+- No heartbeat or timeout-based stale detection exists.
 - Active sessions publish position updates every 5s during playback, but silent disconnections (e.g., browser closed) are not detected.
 - A device remains "active" indefinitely until another device explicitly takes over.
-- **Roadmap:** Heartbeat-based inactive detection (mark sessions stale after N minutes without updates).
+- See [ROADMAP.md](./ROADMAP.md) for planned improvements.
 
 ### Session Takeover Flow
 
@@ -200,19 +200,13 @@ Nostr protocol integration for cloud sync.
 - d-tag: "audioplayer-v3"
 
 **Session tag strategy**
-- ✅ **Current:** UUIDv4 generated via `crypto.randomUUID()` per client session.
-
-**Roadmap improvements**
-- Namespaced, high-entropy IDs (UUIDv4 is acceptable).
-- Publish-time collision checks: if an existing event contains the same session tag, regenerate and republish.
-- Optional per-URL or per-user namespace prefix to avoid cross-URL collisions.
+- UUIDv4 generated via `crypto.randomUUID()` per client session (122 bits of randomness).
 
 **Stale-session detection**
-- ✅ **Current:** Real-time subscription detects remote session activity via `HistoryPayload.sessionId`. When a remote event with a different sessionId arrives, the local session transitions to `stale` status only if currently `active`. Idle sessions stay idle (they haven't claimed the session yet).
-- ✅ **Idle state:** Page load with secret starts in `idle` state. User must click "Start Session" to claim. This prevents race conditions and confusion about session ownership.
-- ✅ **Takeover grace period:** After taking over a session, remote events are ignored for a configurable grace period (`ignoreRemoteUntil`) to prevent immediate re-staling from delayed events.
-- ✅ **Live position sync:** Active sessions publish position updates every 5s during playback, allowing idle/stale devices to track playback position. Idle devices apply incoming position updates immediately to their UI and history (displayed position stays in sync) but do not start or change playback state. When transitioning from idle to active, the client seeks to the latest received position and begins playback from there (only the most recent position is retained, no queueing). Takeover grace period rules still apply to prevent immediate re-staling from delayed events.
-- ⚠️ **Roadmap:** Heartbeat-based inactive detection (mark sessions inactive after N minutes without updates).
+- Real-time subscription detects remote session activity via `HistoryPayload.sessionId`. When a remote event with a different sessionId arrives, the local session transitions to `stale` status only if currently `active`. Idle sessions stay idle (they haven't claimed the session yet).
+- **Idle state:** Page load with secret starts in `idle` state. User must click "Start Session" to claim. This prevents race conditions and confusion about session ownership.
+- **Takeover grace period:** After taking over a session, remote events are ignored for a configurable grace period (`ignoreRemoteUntil`) to prevent immediate re-staling from delayed events.
+- **Live position sync:** Active sessions publish position updates every 5s during playback, allowing idle/stale devices to track playback position. Idle devices apply incoming position updates immediately to their UI and history (displayed position stays in sync) but do not start or change playback state. When transitioning from idle to active, the client seeks to the latest received position and begins playback from there (only the most recent position is retained, no queueing). Takeover grace period rules still apply to prevent immediate re-staling from delayed events.
 
 **Key functions (nostr-sync.ts):**
 - `saveHistoryToNostr()`: Encrypts and publishes history with embedded timestamp and sessionId
@@ -276,34 +270,35 @@ URL: https://app.example.com/#<secret>
 
 ## Resilience & Error Handling
 
-This section documents the current behavior and intended resilience strategy for sync and playback history.
+This section documents the current behavior for sync and playback history. See [ROADMAP.md](./ROADMAP.md) for planned improvements.
 
 **Relay unavailability**
-- ✅ **Current Behavior:** Load/save failures surface as sync status `error` with a user-visible message; local playback/history continues. Subscription setup failures are logged; relay drops can go unnoticed aside from console logs.
-- ⚠️ **Intended Behavior (Roadmap):** Graceful local-only mode with a visible “offline/relay unavailable” indicator, retry with exponential backoff, and relay failover across the configured relay list (not implemented).
+- Load/save failures surface as sync status `error` with a user-visible message; local playback/history continues.
+- Subscription setup failures are logged; relay drops can go unnoticed aside from console logs.
 
 **Failed encryption/decryption**
-- ✅ **Current Behavior:** Decryption errors are surfaced as user-facing errors and logged; bad blobs are not merged.
-- ⚠️ **Intended Behavior (Roadmap):** Discard corrupted cloud blobs after repeated failures to prevent blocking future syncs (not implemented).
+- Decryption errors are surfaced as user-facing errors and logged; bad blobs are not merged.
 
 **Merge conflict strategy (`mergeHistory`)**
-- ✅ **Current Behavior:** Deterministic per-URL merge. Default behavior preserves local ordering and adds remote entries that don’t exist locally. If `preferRemote` is enabled (e.g., takeover), remote entries replace local entries for the same URL. If `preferRemoteOrder` is enabled, remote ordering is used and local-only entries are appended. Manual takeover explicitly resolves conflicts by preferring remote content and then re‑publishing as the active session.
-- ⚠️ **Intended Behavior (Roadmap):** More granular per-entry reconciliation rules beyond session-based takeover (not implemented).
+- Remote is source of truth for idle/stale sessions (list order, titles, gain, new URLs).
+- Local position is preserved only when local `lastPlayedAt` timestamp is newer for the same URL.
+- Manual takeover re-publishes as the active session.
 
 **Offline/network transience**
-- ✅ **Current Behavior:** Auto-save is debounced; failed saves surface errors but are not queued for retry.
-- ⚠️ **Intended Behavior (Roadmap):** Maintain a retry queue for pending save operations, apply exponential backoff, and replay queued operations when the network reconnects (not implemented).
+- Auto-save is debounced; failed saves surface errors but are not queued for retry.
 
 **Browser requirements / limitations**
-- ✅ **Current Behavior:** Requires Web Crypto API (SubtleCrypto) for key derivation/encryption and uses `localStorage` for history. Relies on network access to Nostr relays; no service worker/offline cache.
-- ⚠️ **Intended Behavior (Roadmap):** Provide explicit offline UI guidance and optional local-only mode when relay access is blocked (not implemented).
-  Recommended guidance: use modern Chromium/Firefox/Safari; avoid private browsing for persistent history; expect sync to be unavailable when offline or when relay access is blocked by network policy.
+- Requires Web Crypto API (SubtleCrypto) for key derivation/encryption.
+- Uses `localStorage` for history persistence.
+- Relies on network access to Nostr relays; no service worker/offline cache.
+- Recommended: use modern Chromium/Firefox/Safari; avoid private browsing for persistent history.
 
 ## Known Limitations
 
 - No durable retry queue for failed sync operations (errors must be retried manually or via auto‑save once connectivity returns).
 - Relay failures can degrade cross‑device sync without local data loss.
-- Conflict resolution is session‑based; concurrent active sessions are resolved via takeover rather than per‑field reconciliation.
+- Conflict resolution is session‑based; concurrent active sessions are resolved via timestamp-based takeover.
+- See [ROADMAP.md](./ROADMAP.md) for planned improvements to address these limitations.
 
 ## Performance & Scalability
 
@@ -321,10 +316,10 @@ This section documents the current behavior and intended resilience strategy for
 
 ## Error Taxonomy
 
-- **Network/Relay:** retry with backoff (roadmap), fail‑safe to local‑only, user‑visible status + logs.
-- **Crypto/Decryption:** surface a clear error and skip corrupted blobs; never block local usage.
-- **Storage:** handle `localStorage` quota/availability errors with a warning and graceful fallback.
-- **State/Concurrency:** avoid stale session writes; require explicit takeover for active conflicts.
+- **Network/Relay:** Fail‑safe to local‑only, user‑visible status + logs.
+- **Crypto/Decryption:** Surface a clear error and skip corrupted blobs; never block local usage.
+- **Storage:** Handle `localStorage` quota/availability errors with a warning and graceful fallback.
+- **State/Concurrency:** Avoid stale session writes; require explicit takeover for active conflicts.
 
 ## Testing Strategy
 

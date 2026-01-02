@@ -248,105 +248,69 @@ export function subscribeToHistoryDetailed(
 export interface MergeResult {
   merged: HistoryEntry[];
   addedFromCloud: number;
-  duplicatesSkipped: number;
-}
-
-export interface MergeOptions {
-  preferRemote?: boolean;
-  preferRemoteOrder?: boolean;
 }
 
 /**
- * Merge cloud history into local history.
- * Keep local order, add URLs from cloud that don't exist locally.
- * If preferRemote is true, remote entries replace local entries for the same URL.
+ * Merge remote history into local history.
+ * Remote is the source of truth for ordering, URLs, titles, and gain.
+ * Local position is preserved only when local lastPlayedAt is newer for the same URL.
  *
- * @example Default (no options) - local order preserved, cloud-only URLs appended
+ * @example Position preserved when local is newer
  * ```
- * local:  [{url:"A", position:10}, {url:"B", position:20}]
- * cloud:  [{url:"B", position:99, title:"B Title"}, {url:"C", position:30}]
- * merged: [{url:"A", position:10}, {url:"B", position:20, title:"B Title"}, {url:"C", position:30}]
- * addedFromCloud: 1, duplicatesSkipped: 1
- * ```
- *
- * @example preferRemote=true - remote data replaces local for same URL
- * ```
- * local:  [{url:"A", position:10}, {url:"B", position:20}]
- * cloud:  [{url:"B", position:99, title:"B Title"}, {url:"C", position:30}]
- * merged: [{url:"A", position:10}, {url:"B", position:99, title:"B Title"}, {url:"C", position:30}]
- * addedFromCloud: 1, duplicatesSkipped: 1
+ * local:  [{url:"A", position:50, lastPlayedAt:"2024-01-02"}]
+ * remote: [{url:"A", position:10, lastPlayedAt:"2024-01-01"}, {url:"B", position:20, lastPlayedAt:"2024-01-01"}]
+ * merged: [{url:"A", position:50, lastPlayedAt:"2024-01-01"}, {url:"B", position:20, lastPlayedAt:"2024-01-01"}]
+ * // URL "A": remote entry with local position (local timestamp is newer)
+ * // URL "B": remote entry as-is (not in local)
  * ```
  *
- * @example preferRemoteOrder=true - remote ordering used, local-only appended
+ * @example Remote wins when remote is newer
  * ```
- * local:  [{url:"A", position:10}, {url:"B", position:20}]
- * cloud:  [{url:"C", position:30}, {url:"B", position:99}]
- * merged: [{url:"C", position:30}, {url:"B", position:20}, {url:"A", position:10}]
- * addedFromCloud: 1, duplicatesSkipped: 1
- * ```
- *
- * @example preferRemote=true, preferRemoteOrder=true - full remote preference
- * ```
- * local:  [{url:"A", position:10}, {url:"B", position:20}]
- * cloud:  [{url:"C", position:30}, {url:"B", position:99}]
- * merged: [{url:"C", position:30}, {url:"B", position:99}, {url:"A", position:10}]
- * addedFromCloud: 1, duplicatesSkipped: 1
+ * local:  [{url:"A", position:50, lastPlayedAt:"2024-01-01"}]
+ * remote: [{url:"A", position:10, lastPlayedAt:"2024-01-02"}]
+ * merged: [{url:"A", position:10, lastPlayedAt:"2024-01-02"}]
  * ```
  */
 export function mergeHistory(
   local: HistoryEntry[],
-  cloud: HistoryEntry[],
-  options?: MergeOptions
+  remote: HistoryEntry[]
 ): MergeResult {
   const localByUrl = new Map(local.map((e) => [e.url, e]));
-  const cloudByUrl = new Map(cloud.map((e) => [e.url, e]));
-  const preferRemote = options?.preferRemote === true;
-  const preferRemoteOrder = options?.preferRemoteOrder === true;
 
-  const newFromCloud = cloud.filter((e) => !localByUrl.has(e.url));
-  const duplicatesSkipped = cloud.length - newFromCloud.length;
-  const resolveTitle = (
-    primary: HistoryEntry,
-    secondary?: HistoryEntry
-  ): HistoryEntry => {
-    if (primary.title || !secondary?.title) {
-      return primary;
+  let addedFromCloud = 0;
+
+  // Remote is the base - use remote order and entries
+  const merged = remote.map((remoteEntry) => {
+    const localEntry = localByUrl.get(remoteEntry.url);
+    if (!localEntry) {
+      addedFromCloud++;
+      return remoteEntry;
     }
-    return { ...primary, title: secondary.title };
-  };
 
-  if (preferRemoteOrder) {
-    const mergedFromRemote = cloud.map((entry) => {
-      if (preferRemote) {
-        return resolveTitle(entry, localByUrl.get(entry.url));
-      }
-      const localEntry = localByUrl.get(entry.url);
-      if (localEntry) {
-        return resolveTitle(localEntry, entry);
-      }
-      return entry;
-    });
+    // Same URL exists in both - check if local position should be preserved
+    const localTimeParsed = new Date(localEntry.lastPlayedAt).getTime();
+    const remoteTimeParsed = new Date(remoteEntry.lastPlayedAt).getTime();
 
-    const newFromLocal = local.filter((e) => !cloudByUrl.has(e.url));
+    // Treat invalid timestamps as -Infinity for deterministic comparison
+    const localTime = Number.isFinite(localTimeParsed) ? localTimeParsed : -Infinity;
+    const remoteTime = Number.isFinite(remoteTimeParsed) ? remoteTimeParsed : -Infinity;
 
-    return {
-      merged: [...mergedFromRemote, ...newFromLocal],
-      addedFromCloud: newFromCloud.length,
-      duplicatesSkipped,
-    };
-  }
-
-  const merged = local.map((entry) => {
-    if (!preferRemote) {
-      return resolveTitle(entry, cloudByUrl.get(entry.url));
+    // Both invalid: fall back to remote
+    if (localTime === -Infinity && remoteTime === -Infinity) {
+      return remoteEntry;
     }
-    const remote = cloudByUrl.get(entry.url);
-    return remote ? resolveTitle(remote, entry) : entry;
+
+    if (localTime > remoteTime) {
+      // Local is newer - preserve position only, use remote for everything else
+      return { ...remoteEntry, position: localEntry.position };
+    }
+
+    // Remote wins entirely
+    return remoteEntry;
   });
 
   return {
-    merged: [...merged, ...newFromCloud],
-    addedFromCloud: newFromCloud.length,
-    duplicatesSkipped,
+    merged,
+    addedFromCloud,
   };
 }
