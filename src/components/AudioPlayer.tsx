@@ -211,14 +211,6 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       setIsLoaded(true);
       setNowPlaying(urlToLoad);
       setUrl("");
-      // Apply pending seek position
-      if (pendingSeekPositionRef.current !== null) {
-        const seekTo = pendingSeekPositionRef.current;
-        pendingSeekPositionRef.current = null;
-        if (audio) {
-          audio.currentTime = seekTo;
-        }
-      }
     };
 
     if (urlToLoad.includes(".m3u8")) {
@@ -373,11 +365,27 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     }
   };
 
+  const applyPendingSeek = useCallback(() => {
+    const audio = audioRef.current;
+    const pending = pendingSeekPositionRef.current;
+    if (!audio || pending === null) return;
+    if (isLiveStreamRef.current) {
+      pendingSeekPositionRef.current = null;
+      return;
+    }
+    if (isFinite(pending)) {
+      audio.currentTime = pending;
+      setCurrentTime(pending);
+    }
+    pendingSeekPositionRef.current = null;
+  }, []);
+
   const handleLoadedMetadata = () => {
     const audio = audioRef.current;
     if (audio) {
       setDuration(audio.duration);
     }
+    applyPendingSeek();
   };
 
   const handlePause = () => {
@@ -575,7 +583,10 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         ref={audioRef}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
-        onPlay={() => setIsPlaying(true)}
+        onPlay={() => {
+          setIsPlaying(true);
+          applyPendingSeek();
+        }}
         onPause={handlePause}
         onEnded={() => setIsPlaying(false)}
         onError={() => setError("Audio playback error")}
