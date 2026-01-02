@@ -114,10 +114,7 @@ interface HistoryEntry {
 Nostr protocol integration for cloud sync.
 
 **Relays used:**
-- wss://relay.damus.io
-- wss://relay.primal.net
-- wss://relay.nostr.band
-- wss://nos.lol
+...
 
 **Event structure (NIP-78):**
 - Kind: 30078 (application-specific replaceable)

@@ -265,7 +265,7 @@ export function useNostrSync({
         onTakeOverRef.current?.(cloudHistory);
       }
       if (followRemote) {
-        onRemoteSyncRef.current?.(cloudHistory);
+        onRemoteSyncRef.current?.(result.merged);
       }
       return result;
     },

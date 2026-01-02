@@ -121,6 +121,7 @@ function AudioPlayerInner({
   const shouldShowLoadInputs = !nowPlayingUrl || showLoadInputs;
   const [isEditingNowPlaying, setIsEditingNowPlaying] = useState(false);
   const [nowPlayingTitleDraft, setNowPlayingTitleDraft] = useState("");
+  const wasSessionStaleRef = useRef(false);
 
   // Keep refs in sync with state for use in callbacks
   useEffect(() => {
@@ -557,13 +558,27 @@ function AudioPlayerInner({
     const entry = remoteHistory[0];
     if (!entry) return;
 
+    if (isSessionStale) {
+      currentUrlRef.current = entry.url;
+      currentTitleRef.current = entry.title;
+      setNowPlayingUrl(entry.url);
+      setNowPlayingTitle(entry.title ?? null);
+      setCurrentTime(isFinite(entry.position) ? entry.position : 0);
+      return;
+    }
+
     if (currentUrlRef.current && currentUrlRef.current === entry.url && audioRef.current) {
+      if (!isLiveStreamRef.current && isFinite(entry.position)) {
+        const delta = Math.abs(audioRef.current.currentTime - entry.position);
+        if (delta > 0.5) {
+          pendingSeekPositionRef.current = entry.position;
+          pendingSeekAttemptsRef.current = 0;
+          seekingToTargetRef.current = false;
+          applyPendingSeek();
+        }
+      }
       currentTitleRef.current = entry.title;
       setNowPlayingTitle(entry.title ?? null);
-      pendingSeekPositionRef.current = entry.position;
-      pendingSeekAttemptsRef.current = 0;
-      seekingToTargetRef.current = false;
-      applyPendingSeek();
       return;
     }
 
@@ -802,8 +817,37 @@ function AudioPlayerInner({
       if (audio && !audio.paused) {
         audio.pause();
       }
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+      if (audio) {
+        audio.src = "";
+        audio.load();
+      }
+      setIsLoaded(false);
+      setIsPlaying(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (isSessionStale) {
+      wasSessionStaleRef.current = true;
+      return;
+    }
+    if (!wasSessionStaleRef.current) return;
+    wasSessionStaleRef.current = false;
+    const entry =
+      (nowPlayingUrl && history.find((item) => item.url === nowPlayingUrl)) ||
+      history[0];
+    if (!entry) return;
+    const timeoutId = window.setTimeout(() => {
+      loadFromHistory(entry, { forceReset: true });
+    }, 0);
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [isSessionStale, history, nowPlayingUrl, loadFromHistory]);
 
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6">
@@ -947,21 +991,24 @@ function AudioPlayerInner({
         </div>
       )}
 
-      <audio
-        ref={audioRef}
-        onTimeUpdate={handleTimeUpdate}
-        onLoadedMetadata={handleLoadedMetadata}
-        onCanPlay={applyPendingSeek}
-        onPlay={() => {
-          setIsPlaying(true);
-        }}
-        onSeeked={handleSeeked}
-        onPause={handlePause}
-        onEnded={() => setIsPlaying(false)}
-        onError={() => setError("Audio playback error")}
-      />
+      {!isSessionStale && (
+        <audio
+          ref={audioRef}
+          onTimeUpdate={handleTimeUpdate}
+          onLoadedMetadata={handleLoadedMetadata}
+          onCanPlay={applyPendingSeek}
+          onPlay={() => {
+            setIsPlaying(true);
+          }}
+          onSeeked={handleSeeked}
+          onPause={handlePause}
+          onEnded={() => setIsPlaying(false)}
+          onError={() => setError("Audio playback error")}
+        />
+      )}
 
-      <div className="space-y-4">
+      {!isSessionStale && (
+        <div className="space-y-4">
         <div className="flex items-center justify-center gap-4">
           <button
             onClick={() => seekRelative(-15)}
@@ -1081,7 +1128,14 @@ function AudioPlayerInner({
             </>
           )}
         </div>
-      </div>
+        </div>
+      )}
+
+      {isSessionStale && nowPlayingUrl && (
+        <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
+          Now playing position: {formatTime(currentTime)}
+        </div>
+      )}
 
       {/* History List */}
       <div className="space-y-2">

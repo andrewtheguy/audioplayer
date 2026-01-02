@@ -6,7 +6,7 @@ import { encryptHistory, decryptHistory } from "./nostr-crypto";
 export const RELAYS = [
   "wss://relay.damus.io",
   "wss://relay.primal.net",
-  "wss://relay.nostr.band",
+  //"wss://relay.nostr.band",
   "wss://nos.lol",
 ];
 
@@ -89,7 +89,15 @@ export async function saveHistoryToNostr(
 
   try {
     throwIfAborted(signal);
-    await Promise.any(pool.publish(RELAYS, event));
+    const publishPromises = pool.publish(RELAYS, event).map((promise, index) =>
+      promise.catch((err) => {
+        const relay = RELAYS[index] ?? "unknown relay";
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[nostr] publish failed on ${relay}: ${message}`);
+        throw err;
+      })
+    );
+    await Promise.any(publishPromises);
     throwIfAborted(signal);
   } catch (err) {
     // Promise.any throws AggregateError when all promises reject
