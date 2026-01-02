@@ -54,6 +54,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const pausedAtTimestampRef = useRef<number | null>(null);
   const pendingSeekTimerRef = useRef<number | null>(null);
   const pendingSeekAttemptsRef = useRef<number>(0);
+  const pendingAutoPlayRef = useRef<boolean>(false);
 
   const [url, setUrl] = useState(initialUrl);
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
@@ -182,7 +183,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
 
   // Load directly from a history entry (with position)
-  const loadFromHistory = useCallback((entry: HistoryEntry) => {
+  const loadFromHistory = useCallback((entry: HistoryEntry, options?: { forceReset?: boolean; autoPlay?: boolean }) => {
     // Save current position before switching
     if (currentUrlRef.current && currentUrlRef.current !== entry.url) {
       saveCurrentPosition();
@@ -201,6 +202,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     // Set pending seek position from history entry
     pendingSeekPositionRef.current = entry.position;
     pendingSeekAttemptsRef.current = 0;
+    pendingAutoPlayRef.current = options?.autoPlay === true;
     if (pendingSeekTimerRef.current) {
       clearTimeout(pendingSeekTimerRef.current);
       pendingSeekTimerRef.current = null;
@@ -209,6 +211,12 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
     const audio = audioRef.current;
     if (!audio) return;
+
+    if (options?.forceReset) {
+      audio.pause();
+      audio.src = "";
+      audio.load();
+    }
 
     if (hlsRef.current) {
       hlsRef.current.destroy();
@@ -417,6 +425,10 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       if (pendingSeekTimerRef.current) {
         clearTimeout(pendingSeekTimerRef.current);
         pendingSeekTimerRef.current = null;
+      }
+      if (pendingAutoPlayRef.current && audio.paused) {
+        pendingAutoPlayRef.current = false;
+        audio.play().catch((e) => setError(`Playback error: ${e.message}`));
       }
     } else {
       schedulePendingSeekRetry();
@@ -830,7 +842,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
           onSessionStatusChange={handleSessionStatusChange}
           onTakeOver={(remoteHistory) => {
             if (remoteHistory.length > 0) {
-              loadFromHistory(remoteHistory[0]);
+              loadFromHistory(remoteHistory[0], { forceReset: true, autoPlay: true });
             }
           }}
         />
