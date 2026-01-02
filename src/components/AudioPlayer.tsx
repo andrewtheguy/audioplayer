@@ -699,10 +699,16 @@ function AudioPlayerInner({
         </div>
       </div>
 
-      {error && (
-        <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
-          {error}
+      {isSessionStale ? (
+        <div className="text-sm text-amber-700 bg-amber-500/10 border border-amber-500/20 p-3 rounded-md">
+          Session taken over by another tab/device. Controls are disabled.
         </div>
+      ) : (
+        error && (
+          <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
+            {error}
+          </div>
+        )
       )}
 
       {/* Now Playing */}
