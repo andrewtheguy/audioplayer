@@ -15,6 +15,7 @@ interface NostrSyncPanelProps {
   history: HistoryEntry[];
   onHistoryLoaded: (merged: HistoryEntry[]) => void;
   onSessionStatusChange?: (status: SessionStatus) => void;
+  onTakeOver?: (merged: HistoryEntry[]) => void;
 }
 
 type SyncStatus = "idle" | "saving" | "loading" | "success" | "error";
@@ -100,6 +101,7 @@ export function NostrSyncPanel({
   history,
   onHistoryLoaded,
   onSessionStatusChange,
+  onTakeOver,
 }: NostrSyncPanelProps) {
   const [secret, setSecret] = useState(getSecretFromHash());
   const [status, setStatus] = useState<SyncStatus>("idle");
@@ -116,18 +118,20 @@ export function NostrSyncPanel({
   // Keep refs for props to ensure performLoad is stable and doesn't trigger effect loops
   const historyRef = useRef(history);
   const onHistoryLoadedRef = useRef(onHistoryLoaded);
+  const onTakeOverRef = useRef(onTakeOver);
   const sessionStatusRef = useRef(sessionStatus);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     historyRef.current = history;
     onHistoryLoadedRef.current = onHistoryLoaded;
-  }, [history, onHistoryLoaded]);
+    onTakeOverRef.current = onTakeOver;
+  }, [history, onHistoryLoaded, onTakeOver]);
 
   useEffect(() => {
     sessionStatusRef.current = sessionStatus;
     onSessionStatusChange?.(sessionStatus);
-  }, [sessionStatus]);
+  }, [sessionStatus, onSessionStatusChange]);
 
   const performSave = useCallback(async (
       currentSecret: string,
@@ -212,8 +216,14 @@ export function NostrSyncPanel({
         }
 
         // Use refs to get latest values
-        const result = mergeHistory(historyRef.current, cloudHistory, { preferRemote: isTakeOver });
+        const result = mergeHistory(historyRef.current, cloudHistory, {
+          preferRemote: isTakeOver,
+          preferRemoteOrder: isTakeOver,
+        });
         onHistoryLoadedRef.current(result.merged);
+        if (isTakeOver) {
+          onTakeOverRef.current?.(result.merged);
+        }
         
         setStatus("success");
         setMessage(

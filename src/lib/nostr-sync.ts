@@ -182,6 +182,7 @@ export interface MergeResult {
 
 export interface MergeOptions {
   preferRemote?: boolean;
+  preferRemoteOrder?: boolean;
 }
 
 /**
@@ -197,15 +198,32 @@ export function mergeHistory(
   const localByUrl = new Map(local.map((e) => [e.url, e]));
   const cloudByUrl = new Map(cloud.map((e) => [e.url, e]));
   const preferRemote = options?.preferRemote === true;
+  const preferRemoteOrder = options?.preferRemoteOrder === true;
+
+  const newFromCloud = cloud.filter((e) => !localByUrl.has(e.url));
+  const duplicatesSkipped = cloud.length - newFromCloud.length;
+
+  if (preferRemoteOrder) {
+    const mergedFromRemote = cloud.map((entry) => {
+      if (preferRemote) return entry;
+      const localEntry = localByUrl.get(entry.url);
+      return localEntry ?? entry;
+    });
+
+    const newFromLocal = local.filter((e) => !cloudByUrl.has(e.url));
+
+    return {
+      merged: [...mergedFromRemote, ...newFromLocal],
+      addedFromCloud: newFromCloud.length,
+      duplicatesSkipped,
+    };
+  }
 
   const merged = local.map((entry) => {
     if (!preferRemote) return entry;
     const remote = cloudByUrl.get(entry.url);
     return remote ?? entry;
   });
-
-  const newFromCloud = cloud.filter((e) => !localByUrl.has(e.url));
-  const duplicatesSkipped = cloud.length - newFromCloud.length;
 
   return {
     merged: [...merged, ...newFromCloud],
