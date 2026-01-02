@@ -61,7 +61,8 @@ Orchestrates cross-device synchronization by connecting session management with 
 
 Manages session state and takeover grace periods:
 
-- **Session Status**: Tracks `idle`, `active`, `stale`, or `unknown` status
+- **Session Status**: Tracks `idle`, `active`, `stale`, `invalid`, or `unknown` status
+- **Secret Validation**: Validates URL hash checksum on load via `isValidSecret()` for fail-fast typo detection
 - **Idle on Load**: When page loads with a secret hash, status starts as `idle` (read-only viewing)
 - **Takeover Grace**: Provides `ignoreRemoteUntil` timestamp to suppress remote events briefly after takeover
 - **Session ID**: Generates unique session IDs via `crypto.randomUUID()`
@@ -112,6 +113,7 @@ User Action → AudioPlayer → saveCurrentPosition() → localStorage
 │                         SESSION STATES                               │
 ├─────────────────────────────────────────────────────────────────────┤
 │  unknown    │  No secret in URL, local-only mode                    │
+│  invalid    │  Secret has bad checksum, likely typo in URL          │
 │  idle       │  Secret present, viewing read-only, not claimed       │
 │  active     │  Session claimed, can edit and sync                   │
 │  stale      │  Another device took over, read-only until reclaim    │
@@ -121,7 +123,9 @@ Page Load Flow:
 ───────────────
   No secret in URL → "unknown" (local only, no sync)
 
-  Secret in URL → "idle" (read-only)
+  Secret in URL with bad checksum → "invalid" (error shown, no sync)
+
+  Secret in URL with valid checksum → "idle" (read-only)
        ↓
   performInitialLoad() fetches history
        ↓
@@ -132,6 +136,7 @@ Page Load Flow:
 
 State Transitions:
 ──────────────────
+  invalid ──[Generate New Secret]──▶ idle (new valid secret)
   idle ──[Start Session]──▶ active
   active ──[Remote takeover]──▶ stale
   stale ──[Take Over Session]──▶ active
@@ -193,7 +198,7 @@ Nostr protocol integration for cloud sync.
 
 **Event structure (NIP-78):**
 - Kind: 30078 (application-specific replaceable)
-- d-tag: "audioplayer-v2"
+- d-tag: "audioplayer-v3"
 
 **Session tag strategy**
 - ✅ **Current:** UUIDv4 generated via `crypto.randomUUID()` per client session.
@@ -213,7 +218,6 @@ Nostr protocol integration for cloud sync.
 **Key functions (nostr-sync.ts):**
 - `saveHistoryToNostr()`: Encrypts and publishes history with embedded timestamp and sessionId
 - `loadHistoryFromNostr()`: Fetches and decrypts latest history, returns `HistoryPayload`
-- `subscribeToHistory()`: Real-time subscription for session changes (basic callback)
 - `subscribeToHistoryDetailed()`: Real-time subscription returning full `HistoryPayload` for timestamp ordering
 - `mergeHistory()`: Combines local and cloud history with conflict resolution
 - `parseAndValidateEventContent()`: Validates Nostr event content structure
@@ -229,9 +233,15 @@ Nostr protocol integration for cloud sync.
 
 Cryptographic utilities for secure sync.
 
+**Secret format:**
+- 11 bytes random + 1 byte XOR checksum = 12 bytes total
+- URL-safe Base64 encoded → 16 characters (e.g., `#OR8QqY-v_4XA64vx`)
+- Checksum enables fail-fast validation before attempting key derivation/decryption
+- `generateSecret()`: Creates new secret with embedded checksum
+- `isValidSecret(secret)`: Validates length, format, and checksum; returns `false` for typos
+
 **Key derivation:**
 - User secret (URL hash) → HKDF-SHA256 with salt → secp256k1 keypair
-- Secret is 96-bit random, URL-safe Base64 encoded
 - `deriveNostrKeys(secret, signal?)`: Async key derivation with optional abort signal
 
 **Encryption (NIP-44):**
@@ -243,19 +253,26 @@ Cryptographic utilities for secure sync.
 ## Security Model
 
 1. **Secret-based Access**: The URL hash contains the secret key
-2. **End-to-End Encryption**: History is encrypted before leaving the device
-3. **No Server Trust**: Relays only see encrypted blobs
-4. **Session Ownership**: Session ID prevents simultaneous edits
+2. **Checksum Validation**: XOR checksum detects typos immediately (fail-fast)
+3. **End-to-End Encryption**: History is encrypted before leaving the device
+4. **No Server Trust**: Relays only see encrypted blobs
+5. **Session Ownership**: Session ID prevents simultaneous edits
 
 ```
 URL: https://app.example.com/#<secret>
                                ↓
-                    deriveNostrKeys(secret)
+                    isValidSecret(secret)
                                ↓
               ┌────────────────┴────────────────┐
               ▼                                 ▼
-        privateKey                         publicKey
-    (decrypt/sign)                      (encrypt/verify)
+          invalid                            valid
+    (show error, block sync)                   ↓
+                                    deriveNostrKeys(secret)
+                                               ↓
+                              ┌────────────────┴────────────────┐
+                              ▼                                 ▼
+                        privateKey                         publicKey
+                    (decrypt/sign)                      (encrypt/verify)
 ```
 
 ## Resilience & Error Handling
