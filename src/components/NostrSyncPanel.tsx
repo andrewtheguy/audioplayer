@@ -42,7 +42,7 @@ export function NostrSyncPanel({
     clearSessionNotice,
     startTakeoverGrace,
   } = useNostrSession({ sessionId, onSessionStatusChange });
-  const { status, message, lastOperation, setMessage, performSave, performLoad } =
+  const { status, message, lastOperation, setMessage, performSave, performLoad, startSession } =
     useNostrSync({
       history,
       secret,
@@ -69,7 +69,7 @@ export function NostrSyncPanel({
     status === "success" &&
     lastOperation?.type &&
     lastOperation.type !== "loaded" &&
-    sessionStatus !== "stale";
+    sessionStatus === "active";
 
   useEffect(() => {
     messageRef.current = message;
@@ -141,6 +141,7 @@ export function NostrSyncPanel({
         {secret && (
              <div className="flex items-center gap-2">
                  {sessionStatus === 'active' && <span className="text-[10px] text-green-500 font-bold px-1.5 py-0.5 bg-green-500/10 rounded-full">ACTIVE</span>}
+                 {sessionStatus === 'idle' && <span className="text-[10px] text-blue-500 font-bold px-1.5 py-0.5 bg-blue-500/10 rounded-full">IDLE</span>}
                  {sessionStatus === 'stale' && <span className="text-[10px] text-amber-500 font-bold px-1.5 py-0.5 bg-amber-500/10 rounded-full">READ-ONLY</span>}
                  <span className="font-mono text-[10px] opacity-70" title="Your secret key is in the URL">
                      Connected
@@ -166,7 +167,17 @@ export function NostrSyncPanel({
         </div>
       ) : (
         <div className="space-y-2">
-          {sessionStatus === 'stale' ? (
+          {sessionStatus === 'idle' ? (
+              <Button
+                size="sm"
+                variant="default"
+                onClick={() => startSession(secret)}
+                disabled={isLoading}
+                className="w-full h-8 text-xs"
+              >
+                  Start Session
+              </Button>
+          ) : sessionStatus === 'stale' ? (
               <Button
                 size="sm"
                 variant="default"
@@ -188,19 +199,20 @@ export function NostrSyncPanel({
                  {copiedLink ? "Copied" : "Copy Sync URL"}
               </Button>
           )}
-          
+
            <div className="text-[10px] text-muted-foreground text-center px-1">
-             {sessionStatus === 'active' ? 'Auto-save enabled.' : 'Bookmark this URL to access your history.'}
+             {sessionStatus === 'active' ? 'Auto-save enabled.' : sessionStatus === 'idle' ? 'Click Start Session to sync from this device.' : 'Bookmark this URL to access your history.'}
            </div>
         </div>
       )}
 
       {displayMessage && (
         <div
-          className={cn("text-xs p-2 rounded-md bg-muted/50 transition-colors", 
+          className={cn("text-xs p-2 rounded-md bg-muted/50 transition-colors",
             status === "error" && "text-destructive bg-destructive/5 border border-destructive/10",
             status !== "error" && "text-muted-foreground",
-            sessionStatus === 'stale' && "bg-amber-500/10 text-amber-600 border border-amber-500/20"
+            sessionStatus === 'stale' && "bg-amber-500/10 text-amber-600 border border-amber-500/20",
+            sessionStatus === 'idle' && "bg-blue-500/10 text-blue-600 border border-blue-500/20"
           )}
         >
           {displayMessage}

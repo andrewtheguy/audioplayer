@@ -61,7 +61,8 @@ Orchestrates cross-device synchronization by connecting session management with 
 
 Manages session state and takeover grace periods:
 
-- **Session Status**: Tracks `active`, `stale`, or `unknown` status
+- **Session Status**: Tracks `idle`, `active`, `stale`, or `unknown` status
+- **Idle on Load**: When page loads with a secret hash, status starts as `idle` (read-only viewing)
 - **Takeover Grace**: Provides `ignoreRemoteUntil` timestamp to suppress remote events briefly after takeover
 - **Session ID**: Generates unique session IDs via `crypto.randomUUID()`
 
@@ -69,12 +70,15 @@ Manages session state and takeover grace periods:
 
 Handles all Nostr synchronization using a master-slave architecture (inspired by NostrPad):
 
+- **Idle State Support**: `performInitialLoad()` fetches history read-only without claiming session
+- **Session Start**: `startSession()` explicitly claims the session when user clicks "Start Session"
 - **Timestamp-based Ordering**: Uses millisecond timestamps embedded in payloads for reliable event ordering
 - **Real-time Subscription**: Subscribes to Nostr events for instant cross-device updates
-- **Auto-save**: Debounced saves when history changes (5s delay)
+- **Auto-save**: Debounced saves when history changes (5s delay, only when active)
 - **Live Position Updates**: Publishes position every 5s during active playback for slave device sync
 - **Local Change Protection**: Uses `isLocalChangeRef` to prevent remote overwrites during local operations
 - **Duplicate Prevention**: Uses `pendingPublishRef` to avoid concurrent publishes
+- **Stale Transition**: Only transitions to `stale` from `active` state (idle stays idle)
 
 ## Data Flow
 

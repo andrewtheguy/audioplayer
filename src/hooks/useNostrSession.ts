@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type SessionStatus = "unclaimed" | "active" | "stale" | "unknown";
+export type SessionStatus = "idle" | "active" | "stale" | "unknown";
 
 interface UseNostrSessionOptions {
   sessionId?: string;
@@ -33,8 +33,10 @@ export function useNostrSession({
   onSessionStatusChange,
   takeoverGraceMs = DEFAULT_TAKEOVER_GRACE_MS,
 }: UseNostrSessionOptions): UseNostrSessionResult {
-  const [secret, setSecret] = useState(getSecretFromHash());
-  const [sessionStatus, setSessionStatus] = useState<SessionStatus>("unknown");
+  const [secret, setSecret] = useState(getSecretFromHash);
+  const [sessionStatus, setSessionStatus] = useState<SessionStatus>(() =>
+    getSecretFromHash() ? "idle" : "unknown"
+  );
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [localSessionId] = useState(() => sessionId ?? crypto.randomUUID());
   const [ignoreRemoteUntil, setIgnoreRemoteUntil] = useState<number>(0);
@@ -59,7 +61,7 @@ export function useNostrSession({
         clearTimeout(staleNoticeTimerRef.current);
       }
       staleNoticeTimerRef.current = window.setTimeout(() => {
-        setSessionNotice("Session taken over by another device.");
+        setSessionNotice("Another device is now active.");
         staleNoticeTimerRef.current = null;
       }, 0);
     }
@@ -78,7 +80,10 @@ export function useNostrSession({
     const handleHashChange = () => {
       const newSecret = getSecretFromHash();
       setSecret(newSecret);
-      if (!newSecret) {
+      if (newSecret) {
+        setSessionStatus("idle");
+        setSessionNotice(null);
+      } else {
         setSessionStatus("unknown");
         setSessionNotice(null);
       }

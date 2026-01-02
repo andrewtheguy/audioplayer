@@ -815,9 +815,11 @@ function AudioPlayerInner({
   }, [isPlaying, loadFromHistory]);
 
   const showLiveCta = isLiveStream && !isPlaying;
-  const handleSessionStatusChange = useCallback((status: "unclaimed" | "active" | "stale" | "unknown") => {
-    setIsSessionStale(status === "stale");
+  const handleSessionStatusChange = useCallback((status: "idle" | "active" | "stale" | "unknown") => {
+    // Both idle and stale are read-only states
+    setIsSessionStale(status === "stale" || status === "idle");
     if (status === "stale") {
+      // Only stale (takeover) needs to pause and cleanup - idle is just viewing
       const audio = audioRef.current;
       if (audio && !audio.paused) {
         audio.pause();
