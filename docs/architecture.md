@@ -233,7 +233,7 @@ Nostr protocol integration for cloud sync.
 Cryptographic utilities for secure sync.
 
 **Secret format:**
-- 11 bytes random + 1 byte XOR checksum = 12 bytes total
+- 11 bytes random + 1 byte CRC-8 checksum = 12 bytes total
 - URL-safe Base64 encoded → 16 characters (e.g., `#OR8QqY-v_4XA64vx`)
 - Checksum enables fail-fast validation before attempting key derivation/decryption
 - `generateSecret()`: Creates new secret with embedded checksum
@@ -252,7 +252,7 @@ Cryptographic utilities for secure sync.
 ## Security Model
 
 1. **Secret-based Access**: The URL hash contains the secret key
-2. **Checksum Validation**: XOR checksum detects typos immediately (fail-fast)
+2. **Checksum Validation**: CRC-8 checksum detects typos immediately (fail-fast)
 3. **End-to-End Encryption**: History is encrypted before leaving the device
 4. **No Server Trust**: Relays only see encrypted blobs
 5. **Session Ownership**: Session ID prevents simultaneous edits
