@@ -295,10 +295,13 @@ export function useNostrSync({
       });
       skipNextDirtyRef.current = true;
       onHistoryLoadedRef.current(result.merged);
-      // Only trigger onTakeOver when transitioning from stale state (actual device takeover)
-      // Don't trigger when starting from idle (first-time session start) to avoid
-      // component remount that would abort the in-progress startSession operation
-      if (isTakeOver && sessionStatusRef.current === "stale") {
+      // Only trigger onTakeOver when transitioning from a non-active state (actual device takeover)
+      // This includes transitions from "stale" (read-only follower) and "idle" (no local session yet),
+      // but avoids firing during already-active sessions to prevent unnecessary remounts.
+      if (
+        isTakeOver &&
+        (sessionStatusRef.current === "stale" || sessionStatusRef.current === "idle")
+      ) {
         onTakeOverRef.current?.(cloudHistory);
       }
       if (followRemote) {

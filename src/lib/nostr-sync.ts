@@ -26,12 +26,16 @@ function throwIfAborted(signal?: AbortSignal): void {
  * Close all relay connections to avoid resource leaks.
  * Call this during application shutdown or cleanup.
  */
+let poolClosed = false;
 export function closePool(): void {
+  if (poolClosed) return;
+  poolClosed = true;
   pool.close(RELAYS);
 }
 
 // Register cleanup handlers for browser environment
-// pagehide is more reliable than beforeunload for mobile/bfcache scenarios
+// Both handlers are registered since browser support varies;
+// the poolClosed flag prevents duplicate cleanup calls.
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", closePool);
   window.addEventListener("pagehide", closePool);

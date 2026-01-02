@@ -11,6 +11,11 @@ export interface NostrKeys {
 // Fixed salt for domain separation
 const SALT = "audioplayer-secret-nostr-v1";
 
+// Secret format: 11 random bytes + 1 checksum byte = 12 bytes → 16 base64 chars
+const SECRET_RANDOM_BYTES = 11;
+const SECRET_TOTAL_BYTES = 12; // SECRET_RANDOM_BYTES + 1 checksum
+const SECRET_LENGTH = 16; // base64 encoded length
+
 /**
  * CRC-8-CCITT lookup table (polynomial 0x07).
  * Provides stronger error detection than XOR or sum:
@@ -90,12 +95,12 @@ function decodeUrlSafeBase64(str: string): Uint8Array | null {
  * The checksum allows fail-fast validation of typos before attempting decryption.
  */
 export function generateSecret(): string {
-  const randomBytes = new Uint8Array(11);
+  const randomBytes = new Uint8Array(SECRET_RANDOM_BYTES);
   crypto.getRandomValues(randomBytes);
   const checksum = computeChecksum(randomBytes);
-  const allBytes = new Uint8Array(12);
+  const allBytes = new Uint8Array(SECRET_TOTAL_BYTES);
   allBytes.set(randomBytes);
-  allBytes[11] = checksum;
+  allBytes[SECRET_RANDOM_BYTES] = checksum;
   return btoa(String.fromCharCode(...allBytes))
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
@@ -107,15 +112,15 @@ export function generateSecret(): string {
  * Returns true if valid, false if checksum fails or format is invalid.
  */
 export function isValidSecret(secret: string): boolean {
-  if (typeof secret !== "string" || secret.length !== 16) {
+  if (typeof secret !== "string" || secret.length !== SECRET_LENGTH) {
     return false;
   }
   const bytes = decodeUrlSafeBase64(secret);
-  if (!bytes || bytes.length !== 12) {
+  if (!bytes || bytes.length !== SECRET_TOTAL_BYTES) {
     return false;
   }
-  const randomBytes = bytes.slice(0, 11);
-  const storedChecksum = bytes[11];
+  const randomBytes = bytes.slice(0, SECRET_RANDOM_BYTES);
+  const storedChecksum = bytes[SECRET_RANDOM_BYTES];
   const computedChecksum = computeChecksum(randomBytes);
   return storedChecksum === computedChecksum;
 }
