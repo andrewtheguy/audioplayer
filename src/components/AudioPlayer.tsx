@@ -553,6 +553,23 @@ function AudioPlayerInner({
     schedulePendingSeekRetry();
   };
 
+  const handleRemoteSync = (remoteHistory: HistoryEntry[]) => {
+    const entry = remoteHistory[0];
+    if (!entry) return;
+
+    if (currentUrlRef.current && currentUrlRef.current === entry.url && audioRef.current) {
+      currentTitleRef.current = entry.title;
+      setNowPlayingTitle(entry.title ?? null);
+      pendingSeekPositionRef.current = entry.position;
+      pendingSeekAttemptsRef.current = 0;
+      seekingToTargetRef.current = false;
+      applyPendingSeek();
+      return;
+    }
+
+    loadFromHistory(entry, { forceReset: true });
+  };
+
   const handleSeeked = () => {
     const audio = audioRef.current;
     const pending = pendingSeekPositionRef.current;
@@ -1211,6 +1228,7 @@ function AudioPlayerInner({
           onTakeOver={(remoteHistory) => {
             onRequestReset?.(remoteHistory.length > 0 ? remoteHistory[0] : null);
           }}
+          onRemoteSync={handleRemoteSync}
           sessionId={sessionId}
         />
       </div>

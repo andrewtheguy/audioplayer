@@ -28,6 +28,7 @@ interface UseNostrSyncOptions {
   startTakeoverGrace: () => void;
   onHistoryLoaded: (merged: HistoryEntry[]) => void;
   onTakeOver?: (remoteHistory: HistoryEntry[]) => void;
+  onRemoteSync?: (remoteHistory: HistoryEntry[]) => void;
   debounceSaveMs?: number;
   operationTimeoutMs?: number;
 }
@@ -104,6 +105,7 @@ export function useNostrSync({
   startTakeoverGrace,
   onHistoryLoaded,
   onTakeOver,
+  onRemoteSync,
   debounceSaveMs = DEFAULT_DEBOUNCE_SAVE_MS,
   operationTimeoutMs = DEFAULT_OPERATION_TIMEOUT_MS,
 }: UseNostrSyncOptions): UseNostrSyncResult {
@@ -115,12 +117,14 @@ export function useNostrSync({
   const historyRef = useRef(history);
   const onHistoryLoadedRef = useRef(onHistoryLoaded);
   const onTakeOverRef = useRef(onTakeOver);
+  const onRemoteSyncRef = useRef(onRemoteSync);
   const sessionStatusRef = useRef(sessionStatus);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipNextDirtyRef = useRef(false);
   const hasMountedRef = useRef(false);
   const mountedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  const followRemoteInFlightRef = useRef(false);
   const performLoadRef = useRef<
     ((
       currentSecret: string,
@@ -148,6 +152,10 @@ export function useNostrSync({
     onHistoryLoadedRef.current = onHistoryLoaded;
     onTakeOverRef.current = onTakeOver;
   }, [history, onHistoryLoaded, onTakeOver]);
+
+  useEffect(() => {
+    onRemoteSyncRef.current = onRemoteSync;
+  });
 
   useEffect(() => {
     sessionStatusRef.current = sessionStatus;
@@ -253,8 +261,11 @@ export function useNostrSync({
       });
       skipNextDirtyRef.current = true;
       onHistoryLoadedRef.current(result.merged);
-      if (isTakeOver || followRemote) {
+      if (isTakeOver) {
         onTakeOverRef.current?.(cloudHistory);
+      }
+      if (followRemote) {
+        onRemoteSyncRef.current?.(cloudHistory);
       }
       return result;
     },
@@ -412,10 +423,16 @@ export function useNostrSync({
       if (cancelled) return null;
       const cleanup = subscribeToHistory(keys.publicKey, () => {
         if (cancelled) return;
-        void performLoadRef.current?.(secret, false, {
-          followRemote: true,
-          silent: true,
-        });
+        if (followRemoteInFlightRef.current) return;
+        followRemoteInFlightRef.current = true;
+        void performLoadRef
+          .current?.(secret, false, {
+            followRemote: true,
+            silent: true,
+          })
+          .finally(() => {
+            followRemoteInFlightRef.current = false;
+          });
       });
       return cleanup;
     };

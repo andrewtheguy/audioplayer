@@ -15,6 +15,7 @@ interface NostrSyncPanelProps {
   onHistoryLoaded: (merged: HistoryEntry[]) => void;
   onSessionStatusChange?: (status: SessionStatus) => void;
   onTakeOver?: (remoteHistory: HistoryEntry[]) => void;
+  onRemoteSync?: (remoteHistory: HistoryEntry[]) => void;
   sessionId?: string;
 }
 
@@ -23,6 +24,7 @@ export function NostrSyncPanel({
   onHistoryLoaded,
   onSessionStatusChange,
   onTakeOver,
+  onRemoteSync,
   sessionId,
 }: NostrSyncPanelProps) {
   const [showDetails, setShowDetails] = useState(false);
@@ -49,6 +51,7 @@ export function NostrSyncPanel({
       startTakeoverGrace,
       onHistoryLoaded,
       onTakeOver,
+      onRemoteSync,
     });
 
   const messageRef = useRef<string | null>(null);
