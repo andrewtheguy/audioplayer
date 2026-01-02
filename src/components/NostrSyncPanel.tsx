@@ -5,9 +5,11 @@ import {
   saveHistoryToNostr,
   loadHistoryFromNostr,
   mergeHistory,
+  subscribeToHistory,
   RELAYS,
 } from "@/lib/nostr-sync";
 import type { HistoryEntry } from "@/lib/history";
+import { cn } from "@/lib/utils";
 
 interface NostrSyncPanelProps {
   history: HistoryEntry[];
@@ -15,6 +17,7 @@ interface NostrSyncPanelProps {
 }
 
 type SyncStatus = "idle" | "saving" | "loading" | "success" | "error";
+type SessionStatus = "unclaimed" | "active" | "stale" | "unknown";
 
 interface LastOperation {
   type: "saved" | "loaded";
@@ -31,7 +34,10 @@ async function getSecretFingerprint(secret: string): Promise<string> {
   const data = encoder.encode(secret);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+  const hashHex = hashArray
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase();
   return `${hashHex.slice(0, 4)}-${hashHex.slice(4, 8)}`;
 }
 
@@ -49,6 +55,7 @@ function formatTimestamp(date: Date): string {
 }
 
 const OPERATION_TIMEOUT_MS = 30000; // 30 seconds
+const DEBOUNCE_SAVE_MS = 5000; // 5 seconds auto-save debounce
 
 class TimeoutError extends Error {
   constructor(message = "Operation timed out") {
@@ -88,7 +95,10 @@ function getSecretFromHash(): string {
   return hash.startsWith("#") ? hash.slice(1) : hash;
 }
 
-export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps) {
+export function NostrSyncPanel({
+  history,
+  onHistoryLoaded,
+}: NostrSyncPanelProps) {
   const [secret, setSecret] = useState(getSecretFromHash());
   const [status, setStatus] = useState<SyncStatus>("idle");
   const [message, setMessage] = useState<string | null>(null);
@@ -96,17 +106,68 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
   const [showDetails, setShowDetails] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
 
+  // Session Management
+  const [localSessionId] = useState(() => crypto.randomUUID());
+  const [sessionStatus, setSessionStatus] = useState<SessionStatus>("unknown");
+  // const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null);
+
   // Keep refs for props to ensure performLoad is stable and doesn't trigger effect loops
   const historyRef = useRef(history);
   const onHistoryLoadedRef = useRef(onHistoryLoaded);
+  const sessionStatusRef = useRef(sessionStatus);
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     historyRef.current = history;
     onHistoryLoadedRef.current = onHistoryLoaded;
   }, [history, onHistoryLoaded]);
 
+  useEffect(() => {
+    sessionStatusRef.current = sessionStatus;
+  }, [sessionStatus]);
+
+  const performSave = useCallback(async (currentSecret: string, historyToSave: HistoryEntry[]) => {
+      if (!currentSecret) return;
+      
+      // Don't save if we are stale!
+      if (sessionStatusRef.current === 'stale') {
+          console.warn("Attempted to save while stale. Ignoring.");
+          return;
+      }
+
+      setStatus("saving");
+      // Only show "Saving..." if manual? For auto-save maybe subtle?
+      // For now let's show it.
+      
+      try {
+        const keys = await withTimeout(
+          deriveNostrKeys(currentSecret),
+          OPERATION_TIMEOUT_MS
+        );
+        await withTimeout(
+          saveHistoryToNostr(historyToSave, keys.privateKey, keys.publicKey, localSessionId),
+          OPERATION_TIMEOUT_MS
+        );
+        const fingerprint = await getSecretFingerprint(currentSecret);
+        setLastOperation({
+          type: "saved",
+          fingerprint,
+          timestamp: formatTimestamp(new Date()),
+        });
+        setStatus("success");
+        setMessage(`Saved ${historyToSave.length} entries`);
+      } catch (err) {
+        setStatus("error");
+        if (err instanceof TimeoutError) {
+          setMessage("Save timed out. Check connection.");
+        } else {
+          setMessage(err instanceof Error ? err.message : "Failed to save");
+        }
+      }
+  }, [localSessionId]);
+
   // Load logic extracted to be reusable
-  const performLoad = useCallback(async (currentSecret: string) => {
+  const performLoad = useCallback(async (currentSecret: string, isTakeOver = false) => {
     if (!currentSecret) return;
 
     setStatus("loading");
@@ -117,7 +178,7 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
         deriveNostrKeys(currentSecret),
         OPERATION_TIMEOUT_MS
       );
-      const cloudHistory = await withTimeout(
+      const cloudData = await withTimeout(
         loadHistoryFromNostr(keys.privateKey, keys.publicKey),
         OPERATION_TIMEOUT_MS
       );
@@ -128,19 +189,50 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
         fingerprint,
         timestamp: formatTimestamp(new Date()),
       });
-      if (cloudHistory) {
+
+      if (cloudData) {
+        const { history: cloudHistory, sessionId: remoteSid } = cloudData;
+        
+        // If we are just checking (initial load), logic is different from "Take Over"
+        if (!isTakeOver) {
+             // If remote session exists and is not us
+             if (remoteSid && remoteSid !== localSessionId) {
+                 setSessionStatus("stale");
+                 setStatus("success");
+                 setMessage("Another session is active. Take over?");
+                 return; // Do NOT merge yet
+             }
+        }
+
         // Use refs to get latest values
         const result = mergeHistory(historyRef.current, cloudHistory);
         onHistoryLoadedRef.current(result.merged);
+        
         setStatus("success");
         setMessage(
           result.addedFromCloud > 0
             ? `Added ${result.addedFromCloud} entries from cloud`
             : "History is up to date"
         );
+        
+        // If taking over or new/matching session, become active
+        if (isTakeOver || !remoteSid || remoteSid === localSessionId) {
+             setSessionStatus("active");
+             // Force save to claim session if taking over or if new
+             if (isTakeOver || !remoteSid) {
+                  // Wait a tick for merge to settle? No, we have merged result.
+                  // Save merged history immediately to claim session
+                  performSave(currentSecret, result.merged);
+             }
+        }
+
       } else {
+        // No history found -> we claim it
         setStatus("success");
-        setMessage("Ready to save (no history found)");
+        setSessionStatus("active");
+        setMessage("Session started (new)");
+        // Save initial empty/current state to claim
+        performSave(currentSecret, historyRef.current);
       }
     } catch (err) {
       setStatus("error");
@@ -150,7 +242,39 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
         setMessage(err instanceof Error ? err.message : "Failed to load");
       }
     }
-  }, []); // Stable dependency
+  }, [localSessionId, performSave]); // Stable dependency
+
+  // Subscription for "Stale" detection
+  useEffect(() => {
+    if (!secret) return;
+    
+    let cleanup: (() => void) | undefined;
+
+    const setupSubscription = async () => {
+        const keys = await deriveNostrKeys(secret);
+        cleanup = subscribeToHistory(keys.publicKey, (remoteSid) => {
+            // If we see a session ID that is NOT ours, we are stale.
+            if (remoteSid && remoteSid !== localSessionId) {
+                setSessionStatus((prev) => {
+                    if (prev !== 'stale') {
+                         setMessage("Session taken over by another device.");
+                         return 'stale';
+                    }
+                    return prev;
+                });
+            } else if (remoteSid === localSessionId) {
+                 // Confirmed active
+                 setSessionStatus('active');
+            }
+        });
+    };
+    
+    setupSubscription();
+    
+    return () => {
+        if (cleanup) cleanup();
+    };
+  }, [secret, localSessionId]);
 
   // Sync state with URL hash and auto-load on change
   useEffect(() => {
@@ -164,11 +288,12 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
         setStatus("idle");
         setMessage(null);
         setLastOperation(null);
+        setSessionStatus("unknown");
       }
     };
 
     window.addEventListener("hashchange", handleHashChange);
-    
+
     // Initial check on mount
     const initialSecret = getSecretFromHash();
     if (initialSecret) {
@@ -181,7 +306,34 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
     return () => {
       window.removeEventListener("hashchange", handleHashChange);
     };
-  }, [performLoad]);
+  }, [performLoad]); // performLoad now handles initial load logic
+
+  // Auto-Save Effect
+  useEffect(() => {
+      if (!secret || sessionStatus !== 'active') return;
+      
+      // If history changes, debounce save
+      if (autoSaveTimerRef.current) {
+          clearTimeout(autoSaveTimerRef.current);
+      }
+      
+      // Only auto-save if we have changes? 
+      // Actually we just save whatever is current state periodically if it changes.
+      // But we need to avoid saving on *load*. 
+      // This effect runs when `history` changes.
+      // `history` changes when we load from cloud too.
+      // So we might auto-save immediately after load?
+      // `performLoad` does a save if it merges/claims.
+      
+      autoSaveTimerRef.current = setTimeout(() => {
+          performSave(secret, history);
+      }, DEBOUNCE_SAVE_MS);
+      
+      return () => {
+          if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      };
+  }, [history, secret, sessionStatus, performSave]);
+
 
   const handleGenerate = () => {
     const newSecret = generateSecret();
@@ -197,7 +349,7 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
       await navigator.clipboard.writeText(url);
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2000);
-      
+
       // If we are in success state, keep the message, otherwise show temporary copy feedback
       if (status !== 'success') {
           setMessage("Link copied to clipboard!");
@@ -216,41 +368,9 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
     }
   };
 
-  const handleSave = async () => {
-    if (!secret) {
-      setStatus("error");
-      setMessage("No secret found in URL");
-      return;
-    }
-
-    setStatus("saving");
-    setMessage("Saving...");
-
-    try {
-      const keys = await withTimeout(
-        deriveNostrKeys(secret),
-        OPERATION_TIMEOUT_MS
-      );
-      await withTimeout(
-        saveHistoryToNostr(history, keys.privateKey, keys.publicKey),
-        OPERATION_TIMEOUT_MS
-      );
-      const fingerprint = await getSecretFingerprint(secret);
-      setLastOperation({
-        type: "saved",
-        fingerprint,
-        timestamp: formatTimestamp(new Date()),
-      });
-      setStatus("success");
-      setMessage(`Saved ${history.length} entries`);
-    } catch (err) {
-      setStatus("error");
-      if (err instanceof TimeoutError) {
-        setMessage("Save timed out. Check your connection and try again.");
-      } else {
-        setMessage(err instanceof Error ? err.message : "Failed to save");
-      }
-    }
+  const handleTakeOver = () => {
+      if (!secret) return;
+      performLoad(secret, true); // true = force take over
   };
 
   const isLoading = status === "saving" || status === "loading";
@@ -260,9 +380,13 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
       <div className="text-xs font-medium text-muted-foreground flex justify-between items-center">
         <span>Nostr Sync</span>
         {secret && (
-             <span className="font-mono text-[10px] opacity-70" title="Your secret key is in the URL">
-                 Connected via URL
-             </span>
+             <div className="flex items-center gap-2">
+                 {sessionStatus === 'active' && <span className="text-[10px] text-green-500 font-bold px-1.5 py-0.5 bg-green-500/10 rounded-full">ACTIVE</span>}
+                 {sessionStatus === 'stale' && <span className="text-[10px] text-amber-500 font-bold px-1.5 py-0.5 bg-amber-500/10 rounded-full">READ-ONLY</span>}
+                 <span className="font-mono text-[10px] opacity-70" title="Your secret key is in the URL">
+                     Connected
+                 </span>
+             </div>
         )}
       </div>
 
@@ -283,43 +407,61 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
         </div>
       ) : (
         <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleSave}
-              disabled={isLoading}
-              className="flex-1 h-8 text-xs bg-primary/5 hover:bg-primary/10 border-primary/20"
-            >
-              {status === "saving" ? "Saving..." : "Save to Cloud"}
-            </Button>
-            
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleCopyLink}
-              className="h-8 text-xs px-3"
-              title="Copy link to share or save"
-            >
-               {copiedLink ? <CheckIcon className="w-3.5 h-3.5 mr-1" /> : <LinkIcon className="w-3.5 h-3.5 mr-1" />}
-               {copiedLink ? "Copied" : "Copy Link"}
-            </Button>
-          </div>
+          {sessionStatus === 'stale' ? (
+              <Button 
+                size="sm"
+                variant="default" // Emphasize
+                onClick={handleTakeOver}
+                disabled={isLoading}
+                className="w-full h-8 text-xs bg-amber-600 hover:bg-amber-700 text-white"
+              >
+                  Take Over Session
+              </Button>
+          ) : (
+              // Auto-save is active, so we don't strictly need a Save button, 
+              // but keeping it for manual force-save or feedback is nice.
+              // Maybe change text to "Saved" or just remove it?
+              // Let's keep it as "Force Save" or "Sync Now" if active.
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => performSave(secret, history)}
+                  disabled={isLoading}
+                  className="flex-1 h-8 text-xs bg-primary/5 hover:bg-primary/10 border-primary/20"
+                >
+                  {status === "saving" ? "Saving..." : "Sync Now"}
+                </Button>
+                
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleCopyLink}
+                  className="h-8 text-xs px-3"
+                  title="Copy link to share or save"
+                >
+                   {copiedLink ? <CheckIcon className="w-3.5 h-3.5 mr-1" /> : <LinkIcon className="w-3.5 h-3.5 mr-1" />}
+                   {copiedLink ? "Copied" : "Copy Link"}
+                </Button>
+              </div>
+          )}
           
            <div className="text-[10px] text-muted-foreground text-center px-1">
-             Bookmark this URL to access your history on other devices.
+             {sessionStatus === 'active' ? 'Auto-save enabled.' : 'Bookmark this URL to access your history.'}
            </div>
         </div>
       )}
 
       {message && (
         <div
-          className={`text-xs p-2 rounded-md bg-muted/50 ${
-            status === "error" ? "text-destructive bg-destructive/5 border border-destructive/10" : "text-muted-foreground"
-          }`}
+          className={cn("text-xs p-2 rounded-md bg-muted/50 transition-colors", 
+            status === "error" && "text-destructive bg-destructive/5 border border-destructive/10",
+            status !== "error" && "text-muted-foreground",
+            sessionStatus === 'stale' && "bg-amber-500/10 text-amber-600 border border-amber-500/20"
+          )}
         >
           {message}
-          {status === "success" && lastOperation && lastOperation.type !== 'loaded' && (
+          {status === "success" && lastOperation && lastOperation.type !== 'loaded' && sessionStatus !== 'stale' && (
             <span className="block mt-1 opacity-75 text-[10px]">
               {lastOperation.type === "saved" ? "Saved" : "Loaded"} at {lastOperation.timestamp}
             </span>
@@ -354,6 +496,10 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
                     <div className="font-medium">Secret Fingerprint:</div>
                     <code className="font-mono text-[10px] block mt-0.5 select-all">
                         {lastOperation?.fingerprint || "..."}
+                    </code>
+                     <div className="font-medium mt-1">Session ID:</div>
+                    <code className="font-mono text-[10px] block mt-0.5 select-all truncate">
+                        {localSessionId}
                     </code>
                 </div>
             )}

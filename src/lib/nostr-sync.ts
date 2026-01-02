@@ -50,7 +50,8 @@ function isValidPayload(
 export async function saveHistoryToNostr(
   history: HistoryEntry[],
   userPrivateKey: Uint8Array,
-  userPublicKey: string
+  userPublicKey: string,
+  sessionId?: string
 ): Promise<void> {
   const { ciphertext, ephemeralPubKey } = encryptHistory(history, userPublicKey);
 
@@ -60,14 +61,19 @@ export async function saveHistoryToNostr(
     ciphertext,
   });
 
+  const tags = [
+    ["d", D_TAG],
+    ["client", "audioplayer"],
+  ];
+  if (sessionId) {
+    tags.push(["session", sessionId]);
+  }
+
   const event = finalizeEvent(
     {
       kind: KIND_HISTORY,
       created_at: Math.floor(Date.now() / 1000),
-      tags: [
-        ["d", D_TAG],
-        ["client", "audioplayer"],
-      ],
+      tags,
       content: payload,
     },
     userPrivateKey
@@ -95,7 +101,7 @@ export async function saveHistoryToNostr(
 export async function loadHistoryFromNostr(
   userPrivateKey: Uint8Array,
   userPublicKey: string
-): Promise<HistoryEntry[] | null> {
+): Promise<{ history: HistoryEntry[]; sessionId: string | null } | null> {
   const events = await pool.querySync(
     RELAYS,
     {
@@ -113,6 +119,10 @@ export async function loadHistoryFromNostr(
   // Get most recent event
   const latest = events.sort((a, b) => b.created_at - a.created_at)[0];
 
+  // Extract session ID from tags
+  const sessionTag = latest.tags.find((t) => t[0] === "session");
+  const sessionId = sessionTag ? sessionTag[1] : null;
+
   // Parse and validate payload structure
   let payload: unknown;
   try {
@@ -128,7 +138,40 @@ export async function loadHistoryFromNostr(
   }
 
   // Decrypt with validated payload
-  return decryptHistory(payload.ciphertext, payload.ephemeralPubKey, userPrivateKey);
+  const history = decryptHistory(
+    payload.ciphertext,
+    payload.ephemeralPubKey,
+    userPrivateKey
+  );
+  return { history, sessionId };
+}
+
+/**
+ * Subscribe to history updates
+ * Returns a cleanup function to unsubscribe
+ */
+export function subscribeToHistory(
+  userPublicKey: string,
+  onEvent: (sessionId: string | null) => void
+): () => void {
+  const sub = pool.subscribeMany(
+    RELAYS,
+    {
+        kinds: [KIND_HISTORY],
+        authors: [userPublicKey],
+        "#d": [D_TAG],
+    },
+    {
+      onevent: (event) => {
+        const sessionTag = event.tags.find((t) => t[0] === "session");
+        onEvent(sessionTag ? sessionTag[1] : null);
+      },
+    }
+  );
+
+  return () => {
+    sub.close();
+  };
 }
 
 export interface MergeResult {
