@@ -4,6 +4,7 @@ export const MAX_HISTORY_ENTRIES = 100;
 
 export interface HistoryEntry {
   url: string;
+  title?: string;
   lastPlayedAt: string;
   position: number;
   gain?: number;
@@ -17,6 +18,7 @@ function isValidHistoryEntry(value: unknown): value is HistoryEntry {
   const entry = value as Record<string, unknown>;
   return (
     typeof entry.url === "string" &&
+    (entry.title === undefined || typeof entry.title === "string") &&
     typeof entry.lastPlayedAt === "string" &&
     typeof entry.position === "number" &&
     (entry.gain === undefined || typeof entry.gain === "number")

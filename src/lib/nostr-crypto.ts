@@ -120,6 +120,7 @@ function isValidHistoryEntry(value: unknown): value is HistoryEntry {
   const entry = value as Record<string, unknown>;
   return (
     typeof entry.url === "string" &&
+    (entry.title === undefined || typeof entry.title === "string") &&
     typeof entry.lastPlayedAt === "string" &&
     typeof entry.position === "number" &&
     (entry.gain === undefined || typeof entry.gain === "number")
