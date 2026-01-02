@@ -35,22 +35,29 @@ function getInitialStatus(secret: string): SessionStatus {
   return "idle";
 }
 
+function getInitialNotice(status: SessionStatus): string | null {
+  if (status === "invalid") {
+    return "Invalid secret link. Check for typos in the URL.";
+  }
+  return null;
+}
+
+function computeInitialState() {
+  const secret = getSecretFromHash();
+  const status = getInitialStatus(secret);
+  const notice = getInitialNotice(status);
+  return { secret, status, notice };
+}
+
 export function useNostrSession({
   sessionId,
   onSessionStatusChange,
   takeoverGraceMs = DEFAULT_TAKEOVER_GRACE_MS,
 }: UseNostrSessionOptions): UseNostrSessionResult {
-  const [secret, setSecret] = useState(getSecretFromHash);
-  const [sessionStatus, setSessionStatus] = useState<SessionStatus>(() =>
-    getInitialStatus(getSecretFromHash())
-  );
-  const [sessionNotice, setSessionNotice] = useState<string | null>(() => {
-    const s = getSecretFromHash();
-    if (s && !isValidSecret(s)) {
-      return "Invalid secret link. Check for typos in the URL.";
-    }
-    return null;
-  });
+  const [{ secret: initialSecret, status: initialStatus, notice: initialNotice }] = useState(computeInitialState);
+  const [secret, setSecret] = useState(initialSecret);
+  const [sessionStatus, setSessionStatus] = useState<SessionStatus>(initialStatus);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(initialNotice);
   const [localSessionId] = useState(() => sessionId ?? crypto.randomUUID());
   const [ignoreRemoteUntil, setIgnoreRemoteUntil] = useState<number>(0);
 
