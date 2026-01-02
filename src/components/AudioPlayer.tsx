@@ -888,7 +888,7 @@ function AudioPlayerInner({
           disabled={isViewOnly}
           className="w-full"
         >
-          Load another
+          Add URL
         </Button>
       ) : (
         <div className="space-y-3">
