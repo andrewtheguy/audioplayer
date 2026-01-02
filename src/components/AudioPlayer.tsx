@@ -106,6 +106,7 @@ function AudioPlayerInner({
   const [isLiveStream, setIsLiveStream] = useState(false);
   const [gainEnabled, setGainEnabled] = useState(false);
   const [gain, setGain] = useState(1); // 1 = 100%
+  const [isSessionStale, setIsSessionStale] = useState(false);
 
   // Keep refs in sync with state for use in callbacks
   useEffect(() => {
@@ -656,10 +657,12 @@ function AudioPlayerInner({
 
   const showLiveCta = isLiveStream && !isPlaying;
   const handleSessionStatusChange = useCallback((status: "unclaimed" | "active" | "stale" | "unknown") => {
-    if (status !== "stale") return;
-    const audio = audioRef.current;
-    if (audio && !audio.paused) {
-      audio.pause();
+    setIsSessionStale(status === "stale");
+    if (status === "stale") {
+      const audio = audioRef.current;
+      if (audio && !audio.paused) {
+        audio.pause();
+      }
     }
   }, []);
 
@@ -674,9 +677,10 @@ function AudioPlayerInner({
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="Enter HLS URL (.m3u8)"
-            onKeyDown={(e) => e.key === "Enter" && loadStream()}
+            onKeyDown={(e) => e.key === "Enter" && !isSessionStale && loadStream()}
+            disabled={isSessionStale}
           />
-          <Button onClick={() => loadStream()}>Load</Button>
+          <Button onClick={() => loadStream()} disabled={isSessionStale}>Load</Button>
         </div>
       </div>
 
@@ -728,15 +732,15 @@ function AudioPlayerInner({
         <div className="flex items-center justify-center gap-4">
           <button
             onClick={() => seekRelative(-15)}
-            disabled={!isLoaded || isLiveStream}
+            disabled={!isLoaded || isLiveStream || isSessionStale}
             className="flex items-center justify-center h-12 w-12 rounded-full border border-border bg-card text-muted-foreground shadow-sm transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:border-dashed disabled:bg-muted/40 disabled:text-muted-foreground/70"
-            title={isLiveStream ? "Seeking disabled for live" : "Back 15 seconds"}
+            title={isSessionStale ? "Take over session first" : isLiveStream ? "Seeking disabled for live" : "Back 15 seconds"}
           >
             <Skip15BackIcon className="w-10 h-10" />
           </button>
           <button
             onClick={togglePlayPause}
-            disabled={!isLoaded}
+            disabled={!isLoaded || isSessionStale}
             className="flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed hover:scale-105 transition-transform"
           >
             {isPlaying ? (
@@ -747,9 +751,9 @@ function AudioPlayerInner({
           </button>
           <button
             onClick={() => seekRelative(30)}
-            disabled={!isLoaded || isLiveStream}
+            disabled={!isLoaded || isLiveStream || isSessionStale}
             className="flex items-center justify-center h-12 w-12 rounded-full border border-border bg-card text-muted-foreground shadow-sm transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:border-dashed disabled:bg-muted/40 disabled:text-muted-foreground/70"
-            title={isLiveStream ? "Seeking disabled for live" : "Forward 30 seconds"}
+            title={isSessionStale ? "Take over session first" : isLiveStream ? "Seeking disabled for live" : "Forward 30 seconds"}
           >
             <Skip30ForwardIcon className="w-10 h-10" />
           </button>
@@ -777,6 +781,7 @@ function AudioPlayerInner({
                 size="sm"
                 variant="outline"
                 onClick={jumpToLiveEdge}
+                disabled={isSessionStale}
                 className="border-red-200 text-red-700 hover:bg-red-50"
               >
                 Go live
@@ -790,7 +795,7 @@ function AudioPlayerInner({
               max={duration || 100}
               step={1}
               onValueChange={handleSeek}
-              disabled={!isLoaded || !isFinite(duration)}
+              disabled={!isLoaded || !isFinite(duration) || isSessionStale}
               className="w-full"
             />
             <div className="flex justify-between text-xs text-muted-foreground">
@@ -807,6 +812,7 @@ function AudioPlayerInner({
             max={1}
             step={0.01}
             onValueChange={handleVolumeChange}
+            disabled={isSessionStale}
             className="w-24"
           />
         </div>
@@ -815,7 +821,7 @@ function AudioPlayerInner({
         <div className="flex items-center gap-3">
           <button
             onClick={handleGainToggle}
-            disabled={!isLoaded}
+            disabled={!isLoaded || isSessionStale}
             className={`text-xs px-2 py-1 rounded border transition-colors ${
               gainEnabled
                 ? "bg-primary text-primary-foreground border-primary"
@@ -833,6 +839,7 @@ function AudioPlayerInner({
                 max={3}
                 step={0.1}
                 onValueChange={(v) => setGain(v[0])}
+                disabled={isSessionStale}
                 className="w-24"
               />
               <span className="text-xs text-muted-foreground w-12">
@@ -860,8 +867,12 @@ function AudioPlayerInner({
                   {history.map((entry) => (
                     <div
                       key={entry.url}
-                      onClick={() => handleHistorySelect(entry)}
-                      className="flex items-center justify-between p-2 rounded hover:bg-accent cursor-pointer group"
+                      onClick={() => !isSessionStale && handleHistorySelect(entry)}
+                      className={`flex items-center justify-between p-2 rounded group ${
+                        isSessionStale
+                          ? "cursor-not-allowed opacity-60"
+                          : "hover:bg-accent cursor-pointer"
+                      }`}
                     >
                       <div className="flex-1 min-w-0 mr-2">
                         <div className="text-sm truncate" title={entry.url}>
@@ -885,7 +896,8 @@ function AudioPlayerInner({
                           variant="ghost"
                           size="sm"
                           onClick={(e) => handleDeleteEntry(e, entry.url)}
-                          className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                          disabled={isSessionStale}
+                          className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 text-muted-foreground hover:text-destructive disabled:cursor-not-allowed"
                           title="Delete"
                         >
                           <XIcon className="w-4 h-4" />
@@ -898,6 +910,7 @@ function AudioPlayerInner({
                   variant="ghost"
                   size="sm"
                   onClick={handleClearHistory}
+                  disabled={isSessionStale}
                   className="text-xs text-muted-foreground hover:text-destructive"
                 >
                   Clear All

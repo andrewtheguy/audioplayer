@@ -461,9 +461,9 @@ export function NostrSyncPanel({
       ) : (
         <div className="space-y-2">
           {sessionStatus === 'stale' ? (
-              <Button 
+              <Button
                 size="sm"
-                variant="default" // Emphasize
+                variant="default"
                 onClick={handleTakeOver}
                 disabled={isLoading}
                 className="w-full h-8 text-xs bg-amber-600 hover:bg-amber-700 text-white"
@@ -471,32 +471,16 @@ export function NostrSyncPanel({
                   Take Over Session
               </Button>
           ) : (
-              // Auto-save is active, so we don't strictly need a Save button, 
-              // but keeping it for manual force-save or feedback is nice.
-              // Maybe change text to "Saved" or just remove it?
-              // Let's keep it as "Force Save" or "Sync Now" if active.
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => performSave(secret, history)}
-                  disabled={isLoading}
-                  className="flex-1 h-8 text-xs bg-primary/5 hover:bg-primary/10 border-primary/20"
-                >
-                  {status === "saving" ? "Saving..." : "Sync Now"}
-                </Button>
-                
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleCopyLink}
-                  className="h-8 text-xs px-3"
-                  title="Copy link to share or save"
-                >
-                   {copiedLink ? <CheckIcon className="w-3.5 h-3.5 mr-1" /> : <LinkIcon className="w-3.5 h-3.5 mr-1" />}
-                   {copiedLink ? "Copied" : "Copy Link"}
-                </Button>
-              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleCopyLink}
+                className="w-full h-8 text-xs"
+                title="Copy link to share or save"
+              >
+                 {copiedLink ? <CheckIcon className="w-3.5 h-3.5 mr-1" /> : <LinkIcon className="w-3.5 h-3.5 mr-1" />}
+                 {copiedLink ? "Copied" : "Copy Link"}
+              </Button>
           )}
           
            <div className="text-[10px] text-muted-foreground text-center px-1">
@@ -554,6 +538,17 @@ export function NostrSyncPanel({
                     <code className="font-mono text-[10px] block mt-0.5 select-all truncate">
                         {localSessionId}
                     </code>
+                    {sessionStatus === 'active' && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => performSave(secret, history)}
+                        disabled={isLoading}
+                        className="mt-3 w-full h-7 text-[10px]"
+                      >
+                        {status === "saving" ? "Saving..." : "Force Sync"}
+                      </Button>
+                    )}
                 </div>
             )}
           </div>
