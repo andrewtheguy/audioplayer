@@ -258,8 +258,10 @@ export interface MergeResult {
  * @example Position preserved when local is newer
  * ```
  * local:  [{url:"A", position:50, lastPlayedAt:"2024-01-02"}]
- * remote: [{url:"A", position:10, lastPlayedAt:"2024-01-01"}, {url:"B", position:20}]
- * merged: [{url:"A", position:50, lastPlayedAt:"2024-01-01", ...remote}, {url:"B", position:20}]
+ * remote: [{url:"A", position:10, lastPlayedAt:"2024-01-01"}, {url:"B", position:20, lastPlayedAt:"2024-01-01"}]
+ * merged: [{url:"A", position:50, lastPlayedAt:"2024-01-01"}, {url:"B", position:20, lastPlayedAt:"2024-01-01"}]
+ * // URL "A": remote entry with local position (local timestamp is newer)
+ * // URL "B": remote entry as-is (not in local)
  * ```
  *
  * @example Remote wins when remote is newer
@@ -286,8 +288,17 @@ export function mergeHistory(
     }
 
     // Same URL exists in both - check if local position should be preserved
-    const localTime = new Date(localEntry.lastPlayedAt).getTime();
-    const remoteTime = new Date(remoteEntry.lastPlayedAt).getTime();
+    const localTimeParsed = new Date(localEntry.lastPlayedAt).getTime();
+    const remoteTimeParsed = new Date(remoteEntry.lastPlayedAt).getTime();
+
+    // Treat invalid timestamps as -Infinity for deterministic comparison
+    const localTime = Number.isFinite(localTimeParsed) ? localTimeParsed : -Infinity;
+    const remoteTime = Number.isFinite(remoteTimeParsed) ? remoteTimeParsed : -Infinity;
+
+    // Both invalid: fall back to remote
+    if (localTime === -Infinity && remoteTime === -Infinity) {
+      return remoteEntry;
+    }
 
     if (localTime > remoteTime) {
       // Local is newer - preserve position only, use remote for everything else
