@@ -78,9 +78,11 @@ export function useNostrSession({
     if (sessionStatus === "active" && secret) {
       saveSessionSecret(secret);
     }
-
-    onSessionStatusChangeRef.current?.(sessionStatus);
   }, [sessionStatus, secret]);
+
+  useEffect(() => {
+    onSessionStatusChangeRef.current?.(sessionStatus);
+  }, [sessionStatus]);
 
   useEffect(() => {
     if (prevStatusRef.current !== "stale" && sessionStatus === "stale") {

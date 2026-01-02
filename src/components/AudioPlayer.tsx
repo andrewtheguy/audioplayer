@@ -793,10 +793,11 @@ function AudioPlayerInner({
   const showLiveCta = isLiveStream && !isPlaying;
   const handleSessionStatusChange = useCallback((status: "idle" | "active" | "stale" | "invalid" | "unknown") => {
     // View-only states: disable controls and unmount audio element
+    // - unknown: no secret in URL, view-only until user starts or resumes a session
     // - idle: arrived with valid secret, view synced history (no resources to cleanup - just loaded)
     // - stale: another device took over, must cleanup resources before becoming view-only
     // - invalid: bad checksum on load, nothing ever loaded (no resources to cleanup)
-    // Note: idle and invalid can only be reached from states without active resources,
+    // Note: unknown, idle, and invalid can only be reached from states without active resources,
     // so cleanup is only needed for stale (the active→stale transition).
     setIsViewOnly(status === "stale" || status === "idle" || status === "invalid" || status === "unknown");
     setActualSessionStatus(status);
@@ -903,7 +904,11 @@ function AudioPlayerInner({
         </div>
       )}
 
-      {actualSessionStatus === "stale" ? (
+      {actualSessionStatus === "unknown" ? (
+        <div className="text-sm text-muted-foreground bg-muted/50 border border-border p-3 rounded-md">
+          No active session. Start or resume a session to enable controls.
+        </div>
+      ) : actualSessionStatus === "stale" ? (
         <div className="text-sm text-amber-700 bg-amber-500/10 border border-amber-500/20 p-3 rounded-md">
           Another device is now active. Controls are disabled.
         </div>
