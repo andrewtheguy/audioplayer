@@ -387,9 +387,7 @@ export function useNostrSync({
     }
 
     autoSaveTimerRef.current = setTimeout(() => {
-      void performSave(secret, history).then((didSave) => {
-        if (didSave) dirtyRef.current = false;
-      });
+      void performSave(secret, history);
     }, debounceSaveMs);
 
     return () => {
