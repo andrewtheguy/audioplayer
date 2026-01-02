@@ -52,6 +52,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const gainRef = useRef<number>(1);
   const pausedAtTimestampRef = useRef<number | null>(null);
+  const pendingSeekAttemptsRef = useRef<number>(0);
 
   const [url, setUrl] = useState(initialUrl);
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
@@ -194,6 +195,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
     // Set pending seek position from history entry
     pendingSeekPositionRef.current = entry.position;
+    pendingSeekAttemptsRef.current = 0;
     const urlToLoad = entry.url;
 
     const audio = audioRef.current;
@@ -362,10 +364,13 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     const audio = audioRef.current;
     if (audio) {
       setCurrentTime(audio.currentTime);
+      if (pendingSeekPositionRef.current !== null) {
+        applyPendingSeek();
+      }
     }
   };
 
-  const applyPendingSeek = useCallback(() => {
+  const applyPendingSeek = () => {
     const audio = audioRef.current;
     const pending = pendingSeekPositionRef.current;
     if (!audio || pending === null) return;
@@ -373,12 +378,25 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       pendingSeekPositionRef.current = null;
       return;
     }
-    if (isFinite(pending)) {
-      audio.currentTime = pending;
-      setCurrentTime(pending);
+    if (!isFinite(pending) || pending < 0) {
+      pendingSeekPositionRef.current = null;
+      return;
     }
-    pendingSeekPositionRef.current = null;
-  }, []);
+    if (audio.seekable.length === 0) return;
+
+    if (pendingSeekAttemptsRef.current >= 5) {
+      pendingSeekPositionRef.current = null;
+      return;
+    }
+
+    pendingSeekAttemptsRef.current += 1;
+    audio.currentTime = pending;
+    setCurrentTime(pending);
+
+    if (Math.abs(audio.currentTime - pending) <= 0.5) {
+      pendingSeekPositionRef.current = null;
+    }
+  };
 
   const handleLoadedMetadata = () => {
     const audio = audioRef.current;
@@ -583,6 +601,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         ref={audioRef}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
+        onCanPlay={applyPendingSeek}
         onPlay={() => {
           setIsPlaying(true);
           applyPendingSeek();
