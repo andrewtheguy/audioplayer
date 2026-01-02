@@ -19,9 +19,6 @@ interface AudioPlayerProps {
 }
 
 interface AudioPlayerInnerProps extends AudioPlayerProps {
-  takeoverEntry?: HistoryEntry | null;
-  onTakeoverApplied?: () => void;
-  onRequestReset?: (entry: HistoryEntry | null) => void;
   sessionId?: string;
 }
 
@@ -54,22 +51,11 @@ function normalizeTitle(value: string): string | undefined {
 }
 
 export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
-  const [resetKey, setResetKey] = useState(0);
-  const [takeoverEntry, setTakeoverEntry] = useState<HistoryEntry | null>(null);
   const [sessionId] = useState(() => crypto.randomUUID());
-
-  const handleRequestReset = useCallback((entry: HistoryEntry | null) => {
-    setTakeoverEntry(entry);
-    setResetKey((prev) => prev + 1);
-  }, []);
 
   return (
     <AudioPlayerInner
-      key={resetKey}
       initialUrl={initialUrl}
-      takeoverEntry={takeoverEntry}
-      onTakeoverApplied={() => setTakeoverEntry(null)}
-      onRequestReset={handleRequestReset}
       sessionId={sessionId}
     />
   );
@@ -77,9 +63,6 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
 function AudioPlayerInner({
   initialUrl = "",
-  takeoverEntry,
-  onTakeoverApplied,
-  onRequestReset,
   sessionId,
 }: AudioPlayerInnerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -353,16 +336,6 @@ function AudioPlayerInner({
       onLoadSuccess();
     }
   }, [saveHistoryEntry]);
-
-  useEffect(() => {
-    if (!takeoverEntry) return;
-    // Defer to next tick so the component is mounted before we mutate state/DOM.
-    const timeoutId = window.setTimeout(() => {
-      loadFromHistory(takeoverEntry, { forceReset: true });
-      onTakeoverApplied?.();
-    }, 0);
-    return () => clearTimeout(timeoutId);
-  }, [takeoverEntry, loadFromHistory, onTakeoverApplied]);
 
   // Load a URL - redirects to loadFromHistory if URL exists in history
   const loadUrl = (urlToLoad: string) => {
@@ -1317,7 +1290,7 @@ function AudioPlayerInner({
           }}
           onSessionStatusChange={handleSessionStatusChange}
           onTakeOver={(remoteHistory) => {
-            onRequestReset?.(remoteHistory.length > 0 ? remoteHistory[0] : null);
+            handleRemoteSync(remoteHistory);
           }}
           onRemoteSync={handleRemoteSync}
           sessionId={sessionId}
