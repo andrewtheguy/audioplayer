@@ -180,20 +180,35 @@ export interface MergeResult {
   duplicatesSkipped: number;
 }
 
+export interface MergeOptions {
+  preferRemote?: boolean;
+}
+
 /**
  * Merge cloud history into local history
- * Keep all local entries, only add URLs from cloud that don't exist locally
+ * Keep local order, add URLs from cloud that don't exist locally.
+ * If preferRemote is true, remote entries replace local entries for the same URL.
  */
 export function mergeHistory(
   local: HistoryEntry[],
-  cloud: HistoryEntry[]
+  cloud: HistoryEntry[],
+  options?: MergeOptions
 ): MergeResult {
-  const localUrls = new Set(local.map((e) => e.url));
-  const newFromCloud = cloud.filter((e) => !localUrls.has(e.url));
+  const localByUrl = new Map(local.map((e) => [e.url, e]));
+  const cloudByUrl = new Map(cloud.map((e) => [e.url, e]));
+  const preferRemote = options?.preferRemote === true;
+
+  const merged = local.map((entry) => {
+    if (!preferRemote) return entry;
+    const remote = cloudByUrl.get(entry.url);
+    return remote ?? entry;
+  });
+
+  const newFromCloud = cloud.filter((e) => !localByUrl.has(e.url));
   const duplicatesSkipped = cloud.length - newFromCloud.length;
 
   return {
-    merged: [...local, ...newFromCloud],
+    merged: [...merged, ...newFromCloud],
     addedFromCloud: newFromCloud.length,
     duplicatesSkipped,
   };

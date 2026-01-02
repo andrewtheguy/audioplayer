@@ -212,7 +212,7 @@ export function NostrSyncPanel({
         }
 
         // Use refs to get latest values
-        const result = mergeHistory(historyRef.current, cloudHistory);
+        const result = mergeHistory(historyRef.current, cloudHistory, { preferRemote: isTakeOver });
         onHistoryLoadedRef.current(result.merged);
         
         setStatus("success");
