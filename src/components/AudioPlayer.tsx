@@ -18,6 +18,12 @@ interface AudioPlayerProps {
   initialUrl?: string;
 }
 
+interface AudioPlayerInnerProps extends AudioPlayerProps {
+  takeoverEntry?: HistoryEntry | null;
+  onTakeoverApplied?: () => void;
+  onRequestReset?: (entry: HistoryEntry | null) => void;
+}
+
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || !isFinite(seconds)) return "00:00:00";
   const hrs = Math.floor(seconds / 3600);
@@ -42,6 +48,31 @@ function truncateUrl(url: string, maxLength = 40): string {
 }
 
 export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
+  const [resetKey, setResetKey] = useState(0);
+  const [takeoverEntry, setTakeoverEntry] = useState<HistoryEntry | null>(null);
+
+  const handleRequestReset = useCallback((entry: HistoryEntry | null) => {
+    setTakeoverEntry(entry);
+    setResetKey((prev) => prev + 1);
+  }, []);
+
+  return (
+    <AudioPlayerInner
+      key={resetKey}
+      initialUrl={initialUrl}
+      takeoverEntry={takeoverEntry}
+      onTakeoverApplied={() => setTakeoverEntry(null)}
+      onRequestReset={handleRequestReset}
+    />
+  );
+}
+
+function AudioPlayerInner({
+  initialUrl = "",
+  takeoverEntry,
+  onTakeoverApplied,
+  onRequestReset,
+}: AudioPlayerInnerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const saveIntervalRef = useRef<number | null>(null);
@@ -54,7 +85,6 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const pausedAtTimestampRef = useRef<number | null>(null);
   const pendingSeekTimerRef = useRef<number | null>(null);
   const pendingSeekAttemptsRef = useRef<number>(0);
-  const pendingAutoPlayRef = useRef<boolean>(false);
 
   const [url, setUrl] = useState(initialUrl);
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
@@ -181,9 +211,8 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     };
   }, [saveCurrentPosition]);
 
-
   // Load directly from a history entry (with position)
-  const loadFromHistory = useCallback((entry: HistoryEntry, options?: { forceReset?: boolean; autoPlay?: boolean }) => {
+  const loadFromHistory = useCallback((entry: HistoryEntry, options?: { forceReset?: boolean }) => {
     // Save current position before switching
     if (currentUrlRef.current && currentUrlRef.current !== entry.url) {
       saveCurrentPosition();
@@ -202,7 +231,6 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     // Set pending seek position from history entry
     pendingSeekPositionRef.current = entry.position;
     pendingSeekAttemptsRef.current = 0;
-    pendingAutoPlayRef.current = options?.autoPlay === true;
     if (pendingSeekTimerRef.current) {
       clearTimeout(pendingSeekTimerRef.current);
       pendingSeekTimerRef.current = null;
@@ -274,6 +302,15 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       onLoadSuccess();
     }
   }, [saveCurrentPosition]);
+
+  useEffect(() => {
+    if (!takeoverEntry) return;
+    const timeoutId = window.setTimeout(() => {
+      loadFromHistory(takeoverEntry, { forceReset: true });
+      onTakeoverApplied?.();
+    }, 0);
+    return () => clearTimeout(timeoutId);
+  }, [takeoverEntry, loadFromHistory, onTakeoverApplied]);
 
   // Load a URL - redirects to loadFromHistory if URL exists in history
   const loadUrl = (urlToLoad: string) => {
@@ -425,10 +462,6 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       if (pendingSeekTimerRef.current) {
         clearTimeout(pendingSeekTimerRef.current);
         pendingSeekTimerRef.current = null;
-      }
-      if (pendingAutoPlayRef.current && audio.paused) {
-        pendingAutoPlayRef.current = false;
-        audio.play().catch((e) => setError(`Playback error: ${e.message}`));
       }
     } else {
       schedulePendingSeekRetry();
@@ -841,9 +874,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
           }}
           onSessionStatusChange={handleSessionStatusChange}
           onTakeOver={(remoteHistory) => {
-            if (remoteHistory.length > 0) {
-              loadFromHistory(remoteHistory[0], { forceReset: true, autoPlay: true });
-            }
+            onRequestReset?.(remoteHistory.length > 0 ? remoteHistory[0] : null);
           }}
         />
       </div>
