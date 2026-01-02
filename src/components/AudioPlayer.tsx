@@ -117,6 +117,8 @@ function AudioPlayerInner({
   const [isSessionStale, setIsSessionStale] = useState(false);
   const [editingUrl, setEditingUrl] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
+  const [showLoadInputs, setShowLoadInputs] = useState(true);
+  const shouldShowLoadInputs = !nowPlayingUrl || showLoadInputs;
 
   // Keep refs in sync with state for use in callbacks
   useEffect(() => {
@@ -294,6 +296,7 @@ function AudioPlayerInner({
       setNowPlayingUrl(urlToLoad);
       setNowPlayingTitle(entry.title ?? null);
       setUrl("");
+      setShowLoadInputs(false);
     };
 
     if (urlToLoad.includes(".m3u8")) {
@@ -401,6 +404,7 @@ function AudioPlayerInner({
       setNowPlayingUrl(urlToLoad);
       setNowPlayingTitle(resolvedTitle ?? null);
       setUrl("");
+      setShowLoadInputs(false);
       // Add to history immediately upon load success
       saveHistoryEntry(0);
     };
@@ -750,32 +754,52 @@ function AudioPlayerInner({
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6">
       {/* URL Input */}
-      <div className="space-y-3">
-        <div className="space-y-2">
-          <label className="text-sm font-medium">Title (optional)</label>
-          <Input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Add a short title"
-            disabled={isSessionStale}
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium">HLS Stream URL</label>
-          <div className="flex gap-2">
+      {nowPlayingUrl && !shouldShowLoadInputs ? (
+        <Button
+          variant="outline"
+          onClick={() => setShowLoadInputs(true)}
+          disabled={isSessionStale}
+          className="w-full"
+        >
+          Load another
+        </Button>
+      ) : (
+        <div className="space-y-3">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Title (optional)</label>
             <Input
               type="text"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="Enter HLS URL (.m3u8)"
-              onKeyDown={(e) => e.key === "Enter" && !isSessionStale && loadStream()}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Add a short title"
               disabled={isSessionStale}
             />
-            <Button onClick={() => loadStream()} disabled={isSessionStale}>Load</Button>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">HLS Stream URL</label>
+            <div className="flex gap-2">
+              <Input
+                type="text"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="Enter HLS URL (.m3u8)"
+                onKeyDown={(e) => e.key === "Enter" && !isSessionStale && loadStream()}
+                disabled={isSessionStale}
+              />
+              <Button onClick={() => loadStream()} disabled={isSessionStale}>Load</Button>
+              {nowPlayingUrl && (
+                <Button
+                  variant="ghost"
+                  onClick={() => setShowLoadInputs(false)}
+                  disabled={isSessionStale}
+                >
+                  Cancel
+                </Button>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {isSessionStale ? (
         <div className="text-sm text-amber-700 bg-amber-500/10 border border-amber-500/20 p-3 rounded-md">
