@@ -35,7 +35,6 @@ interface UseNostrSyncResult {
   status: SyncStatus;
   message: string | null;
   lastOperation: LastOperation | null;
-  isDirty: boolean;
   setMessage: (message: string | null) => void;
   performSave: (
     currentSecret: string,
@@ -112,7 +111,7 @@ export function useNostrSync({
   const [status, setStatus] = useState<SyncStatus>("idle");
   const [message, setMessage] = useState<string | null>(null);
   const [lastOperation, setLastOperation] = useState<LastOperation | null>(null);
-  const [isDirty, setIsDirty] = useState(false);
+  const dirtyRef = useRef(false);
 
   const historyRef = useRef(history);
   const onHistoryLoadedRef = useRef(onHistoryLoaded);
@@ -141,7 +140,7 @@ export function useNostrSync({
       skipNextDirtyRef.current = false;
       return;
     }
-    setIsDirty(true);
+    dirtyRef.current = true;
   }, [history]);
 
   const performSave = useCallback(
@@ -187,7 +186,7 @@ export function useNostrSync({
         });
         setStatus("success");
         setMessage(`Saved ${historyToSave.length} entries`);
-        setIsDirty(false);
+        dirtyRef.current = false;
         return true;
       } catch (err) {
         setStatus("error");
@@ -253,7 +252,7 @@ export function useNostrSync({
           }
 
           setStatus("success");
-          setIsDirty(false);
+          dirtyRef.current = false;
           if (!isStaleRemote) {
             setMessage(
               result.addedFromCloud > 0
@@ -276,7 +275,7 @@ export function useNostrSync({
           setSessionStatus("active");
           clearSessionNotice();
           setMessage("Session started (new)");
-          setIsDirty(false);
+          dirtyRef.current = false;
           void performSave(currentSecret, historyRef.current, { allowStale: true });
         }
       } catch (err) {
@@ -300,18 +299,15 @@ export function useNostrSync({
   );
 
   useEffect(() => {
-    if (!secret) {
-      setStatus("idle");
-      setMessage(null);
-      setLastOperation(null);
-      setIsDirty(false);
-      return;
-    }
-    performLoad(secret);
+    if (!secret) return;
+    const timeoutId = setTimeout(() => {
+      void performLoad(secret);
+    }, 0);
+    return () => clearTimeout(timeoutId);
   }, [performLoad, secret]);
 
   useEffect(() => {
-    if (!secret || sessionStatus !== "active" || !isDirty) return;
+    if (!secret || sessionStatus !== "active" || !dirtyRef.current) return;
 
     if (autoSaveTimerRef.current) {
       clearTimeout(autoSaveTimerRef.current);
@@ -319,20 +315,19 @@ export function useNostrSync({
 
     autoSaveTimerRef.current = setTimeout(() => {
       void performSave(secret, history).then((didSave) => {
-        if (didSave) setIsDirty(false);
+        if (didSave) dirtyRef.current = false;
       });
     }, debounceSaveMs);
 
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     };
-  }, [history, secret, sessionStatus, isDirty, performSave, debounceSaveMs]);
+  }, [history, secret, sessionStatus, performSave, debounceSaveMs]);
 
   return {
-    status,
-    message,
-    lastOperation,
-    isDirty,
+    status: secret ? status : "idle",
+    message: secret ? message : null,
+    lastOperation: secret ? lastOperation : null,
     setMessage,
     performSave,
     performLoad,

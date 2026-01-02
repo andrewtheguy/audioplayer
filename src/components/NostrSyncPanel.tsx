@@ -78,9 +78,9 @@ export function NostrSyncPanel({
               // but here we just want to clear if it hasn't changed to something important.
               // However, since we can't easily check 'current' status inside timeout without refs,
               // we'll just clear if the message is still the copy message.
-              setMessage((prev) =>
-                prev === "Link copied to clipboard!" ? null : prev
-              );
+              if (message === "Link copied to clipboard!") {
+                setMessage(null);
+              }
           }, 3000);
       }
     } catch {

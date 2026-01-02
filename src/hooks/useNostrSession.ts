@@ -60,8 +60,6 @@ export function useNostrSession({
     };
 
     window.addEventListener("hashchange", handleHashChange);
-    const initialSecret = getSecretFromHash();
-    setSecret(initialSecret);
 
     return () => {
       window.removeEventListener("hashchange", handleHashChange);
