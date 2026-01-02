@@ -204,12 +204,13 @@ Nostr protocol integration for cloud sync.
 - Optional per-URL or per-user namespace prefix to avoid cross-URL collisions.
 
 **Stale-session detection**
-- ✅ **Current:** Real-time subscription detects remote session activity via `HistoryPayload.sessionId`. When a remote event with a different sessionId arrives, the local session transitions to `stale` status.
+- ✅ **Current:** Real-time subscription detects remote session activity via `HistoryPayload.sessionId`. When a remote event with a different sessionId arrives, the local session transitions to `stale` status only if currently `active`. Idle sessions stay idle (they haven't claimed the session yet).
+- ✅ **Idle state:** Page load with secret starts in `idle` state. User must click "Start Session" to claim. This prevents race conditions and confusion about session ownership.
 - ✅ **Takeover grace period:** After taking over a session, remote events are ignored for a configurable grace period (`ignoreRemoteUntil`) to prevent immediate re-staling from delayed events.
-- ✅ **Live position sync:** Active sessions publish position updates every 5s during playback, allowing slave devices to track playback position.
+- ✅ **Live position sync:** Active sessions publish position updates every 5s during playback, allowing idle/stale devices to track playback position.
 - ⚠️ **Roadmap:** Heartbeat-based inactive detection (mark sessions inactive after N minutes without updates).
 
-**Key functions:**
+**Key functions (nostr-sync.ts):**
 - `saveHistoryToNostr()`: Encrypts and publishes history with embedded timestamp and sessionId
 - `loadHistoryFromNostr()`: Fetches and decrypts latest history, returns `HistoryPayload`
 - `subscribeToHistory()`: Real-time subscription for session changes (basic callback)
@@ -217,6 +218,12 @@ Nostr protocol integration for cloud sync.
 - `mergeHistory()`: Combines local and cloud history with conflict resolution
 - `parseAndValidateEventContent()`: Validates Nostr event content structure
 - `canSetOnError()`: Type guard for error handler assignment
+
+**Key functions (useNostrSync.ts):**
+- `performInitialLoad()`: Fetches history read-only without claiming session (for idle state)
+- `startSession()`: Claims session by calling performLoad with isTakeOver=true
+- `performLoad()`: Fetches and optionally claims session
+- `performSave()`: Encrypts and publishes current history
 
 ### nostr-crypto.ts
 

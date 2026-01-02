@@ -116,6 +116,7 @@ function AudioPlayerInner({
   const [gainEnabled, setGainEnabled] = useState(false);
   const [gain, setGain] = useState(1); // 1 = 100%
   const [isSessionStale, setIsSessionStale] = useState(false);
+  const [actualSessionStatus, setActualSessionStatus] = useState<"idle" | "active" | "stale" | "unknown">("unknown");
   const [editingUrl, setEditingUrl] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [showLoadInputs, setShowLoadInputs] = useState(true);
@@ -818,6 +819,7 @@ function AudioPlayerInner({
   const handleSessionStatusChange = useCallback((status: "idle" | "active" | "stale" | "unknown") => {
     // Both idle and stale are read-only states
     setIsSessionStale(status === "stale" || status === "idle");
+    setActualSessionStatus(status);
     if (status === "stale") {
       // Only stale (takeover) needs to pause and cleanup - idle is just viewing
       const audio = audioRef.current;
@@ -921,9 +923,9 @@ function AudioPlayerInner({
         </div>
       )}
 
-      {isSessionStale ? (
+      {actualSessionStatus === "stale" ? (
         <div className="text-sm text-amber-700 bg-amber-500/10 border border-amber-500/20 p-3 rounded-md">
-          Session taken over by another tab/device. Controls are disabled.
+          Another device is now active. Controls are disabled.
         </div>
       ) : (
         error && (
