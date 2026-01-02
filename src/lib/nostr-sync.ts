@@ -154,24 +154,39 @@ export function subscribeToHistory(
   userPublicKey: string,
   onEvent: (sessionId: string | null) => void
 ): () => void {
-  const sub = pool.subscribeMany(
-    RELAYS,
-    {
-      kinds: [KIND_HISTORY],
-      authors: [userPublicKey],
-      "#d": [D_TAG],
-    },
-    {
-      onevent: (event) => {
-        const sessionTag = event.tags.find((t) => t[0] === "session");
-        onEvent(sessionTag ? sessionTag[1] : null);
+  try {
+    const sub = pool.subscribeMany(
+      RELAYS,
+      {
+        kinds: [KIND_HISTORY],
+        authors: [userPublicKey],
+        "#d": [D_TAG],
       },
-    }
-  );
+      {
+        onevent: (event) => {
+          try {
+            const sessionTag = event.tags.find((t) => t[0] === "session");
+            onEvent(sessionTag ? sessionTag[1] : null);
+          } catch (err) {
+            console.error("Nostr history event handler failed:", err);
+          }
+        },
+      }
+    );
 
-  return () => {
-    sub.close();
-  };
+    if ("onerror" in sub) {
+      (sub as { onerror?: (err: unknown) => void }).onerror = (err) => {
+        console.error("Nostr history subscription error:", err);
+      };
+    }
+
+    return () => {
+      sub.close();
+    };
+  } catch (err) {
+    console.error("Failed to subscribe to Nostr history:", err);
+    return () => {};
+  }
 }
 
 export interface MergeResult {

@@ -113,6 +113,7 @@ export function NostrSyncPanel({
   const [lastOperation, setLastOperation] = useState<LastOperation | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
 
   // Session Management
   const [localSessionId] = useState(() => sessionId ?? crypto.randomUUID());
@@ -126,6 +127,8 @@ export function NostrSyncPanel({
   const sessionStatusRef = useRef(sessionStatus);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ignoreRemoteUntilRef = useRef<number>(0);
+  const skipNextDirtyRef = useRef(false);
+  const hasMountedRef = useRef(false);
 
   useEffect(() => {
     historyRef.current = history;
@@ -138,28 +141,46 @@ export function NostrSyncPanel({
     onSessionStatusChange?.(sessionStatus);
   }, [sessionStatus, onSessionStatusChange]);
 
+  useEffect(() => {
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      return;
+    }
+    if (skipNextDirtyRef.current) {
+      skipNextDirtyRef.current = false;
+      return;
+    }
+    setIsDirty(true);
+  }, [history]);
+
   const performSave = useCallback(async (
       currentSecret: string,
       historyToSave: HistoryEntry[],
       options?: { allowStale?: boolean }
     ) => {
-      if (!currentSecret) return;
+      if (!currentSecret) return false;
       
       // Don't save if we are stale!
-      if (sessionStatusRef.current === 'stale' && !options?.allowStale) {
+      const shouldBlockSave = () =>
+        sessionStatusRef.current === "stale" && !options?.allowStale;
+
+      if (shouldBlockSave()) {
           console.warn("Attempted to save while stale. Ignoring.");
-          return;
+          return false;
       }
 
-      setStatus("saving");
-      // Only show "Saving..." if manual? For auto-save maybe subtle?
-      // For now let's show it.
-      
       try {
         const keys = await withTimeout(
           deriveNostrKeys(currentSecret),
           OPERATION_TIMEOUT_MS
         );
+        if (shouldBlockSave()) {
+          console.warn("Session became stale before save. Ignoring.");
+          return false;
+        }
+        setStatus("saving");
+        // Only show "Saving..." if manual? For auto-save maybe subtle?
+        // For now let's show it.
         await withTimeout(
           saveHistoryToNostr(historyToSave, keys.privateKey, keys.publicKey, localSessionId),
           OPERATION_TIMEOUT_MS
@@ -172,6 +193,8 @@ export function NostrSyncPanel({
         });
         setStatus("success");
         setMessage(`Saved ${historyToSave.length} entries`);
+        setIsDirty(false);
+        return true;
       } catch (err) {
         setStatus("error");
         if (err instanceof TimeoutError) {
@@ -179,6 +202,7 @@ export function NostrSyncPanel({
         } else {
           setMessage(err instanceof Error ? err.message : "Failed to save");
         }
+        return false;
       }
   }, [localSessionId]);
 
@@ -213,14 +237,14 @@ export function NostrSyncPanel({
         const { history: cloudHistory, sessionId: remoteSid } = cloudData;
         
         // If we are just checking (initial load), logic is different from "Take Over"
-        if (!isTakeOver) {
-             // If remote session exists and is not us
-             if (remoteSid && remoteSid !== localSessionId) {
-                 setSessionStatus("stale");
-                 setStatus("success");
-                 setMessage("Another session is active. Take over?");
-                 return; // Do NOT merge yet
-             }
+        const isStaleRemote =
+          !isTakeOver && remoteSid && remoteSid !== localSessionId;
+        if (isStaleRemote) {
+          setSessionStatus("stale");
+          setStatus("success");
+          setMessage(
+            "Another session is active — viewing in read-only mode. Take over to edit."
+          );
         }
 
         // Use refs to get latest values
@@ -228,17 +252,21 @@ export function NostrSyncPanel({
           preferRemote: isTakeOver,
           preferRemoteOrder: isTakeOver,
         });
+        skipNextDirtyRef.current = true;
         onHistoryLoadedRef.current(result.merged);
         if (isTakeOver) {
           onTakeOverRef.current?.(cloudHistory);
         }
         
         setStatus("success");
-        setMessage(
-          result.addedFromCloud > 0
-            ? `Added ${result.addedFromCloud} entries from cloud`
-            : "History is up to date"
-        );
+        setIsDirty(false);
+        if (!isStaleRemote) {
+          setMessage(
+            result.addedFromCloud > 0
+              ? `Added ${result.addedFromCloud} entries from cloud`
+              : "History is up to date"
+          );
+        }
         
         // If taking over or new/matching session, become active
         if (isTakeOver || !remoteSid || remoteSid === localSessionId) {
@@ -256,6 +284,7 @@ export function NostrSyncPanel({
         setStatus("success");
         setSessionStatus("active");
         setMessage("Session started (new)");
+        setIsDirty(false);
         // Save initial empty/current state to claim
         performSave(currentSecret, historyRef.current, { allowStale: true });
       }
@@ -273,11 +302,11 @@ export function NostrSyncPanel({
   useEffect(() => {
     if (!secret) return;
     
-    let cleanup: (() => void) | undefined;
-
     const setupSubscription = async () => {
         const keys = await deriveNostrKeys(secret);
-        cleanup = subscribeToHistory(keys.publicKey, (remoteSid) => {
+        if (cancelled) return null;
+        const cleanup = subscribeToHistory(keys.publicKey, (remoteSid) => {
+            if (cancelled) return;
             // If we see a session ID that is NOT ours, we are stale.
             if (remoteSid && remoteSid !== localSessionId) {
                 if (Date.now() < ignoreRemoteUntilRef.current) return;
@@ -293,12 +322,19 @@ export function NostrSyncPanel({
                  setSessionStatus('active');
             }
         });
+        return cleanup;
     };
     
-    setupSubscription();
+    let cancelled = false;
+    const cleanupPromise = setupSubscription();
     
     return () => {
-        if (cleanup) cleanup();
+        cancelled = true;
+        void cleanupPromise.then((cleanup) => {
+          if (cleanup) cleanup();
+        }).catch(() => {
+          // Ignore subscription setup failures on teardown.
+        });
     };
   }, [secret, localSessionId]);
 
@@ -317,7 +353,8 @@ export function NostrSyncPanel({
           setSessionStatus("stale");
           setMessage("Session taken over by another device.");
         }
-      } catch {
+      } catch (err) {
+        console.debug("Polling error in NostrSyncPanel:", err);
         // Ignore polling errors to avoid noisy UI updates
       }
     };
@@ -350,10 +387,7 @@ export function NostrSyncPanel({
     // Initial check on mount
     const initialSecret = getSecretFromHash();
     if (initialSecret) {
-      // Use setTimeout to avoid "setState in effect" warning and ensure async execution
-      setTimeout(() => {
-        performLoad(initialSecret);
-      }, 0);
+      performLoad(initialSecret);
     }
 
     return () => {
@@ -363,7 +397,7 @@ export function NostrSyncPanel({
 
   // Auto-Save Effect
   useEffect(() => {
-      if (!secret || sessionStatus !== 'active') return;
+      if (!secret || sessionStatus !== 'active' || !isDirty) return;
       
       // If history changes, debounce save
       if (autoSaveTimerRef.current) {
@@ -379,13 +413,15 @@ export function NostrSyncPanel({
       // `performLoad` does a save if it merges/claims.
       
       autoSaveTimerRef.current = setTimeout(() => {
-          performSave(secret, history);
+          void performSave(secret, history).then((didSave) => {
+            if (didSave) setIsDirty(false);
+          });
       }, DEBOUNCE_SAVE_MS);
       
       return () => {
           if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
       };
-  }, [history, secret, sessionStatus, performSave]);
+  }, [history, secret, sessionStatus, isDirty, performSave]);
 
 
   const handleGenerate = () => {
@@ -417,7 +453,6 @@ export function NostrSyncPanel({
       }
     } catch {
       setMessage("Failed to copy link");
-      setStatus("error");
     }
   };
 

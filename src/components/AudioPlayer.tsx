@@ -90,6 +90,7 @@ function AudioPlayerInner({
   const pendingSeekTimerRef = useRef<number | null>(null);
   const pendingSeekAttemptsRef = useRef<number>(0);
   const seekingToTargetRef = useRef<boolean>(false);
+  const pendingSeekPositionRef = useRef<number | null>(null);
 
   const [url, setUrl] = useState(initialUrl);
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
@@ -100,7 +101,6 @@ function AudioPlayerInner({
   const [isLoaded, setIsLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>(() => getHistory());
-  const pendingSeekPositionRef = useRef<number | null>(null);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [isLiveStream, setIsLiveStream] = useState(false);
@@ -139,6 +139,10 @@ function AudioPlayerInner({
     audioContextRef.current = ctx;
     sourceNodeRef.current = source;
     gainNodeRef.current = gainNode;
+
+    ctx.resume().catch((err) => {
+      console.error("Failed to resume AudioContext:", err);
+    });
   }, []);
 
   // Apply gain value: 1 if disabled, gain value if enabled
@@ -415,6 +419,12 @@ function AudioPlayerInner({
     if (isPlaying) {
       audio.pause();
     } else {
+      const ctx = audioContextRef.current;
+      if (ctx && ctx.state === "suspended") {
+        ctx.resume().catch((err) => {
+          console.error("Failed to resume AudioContext:", err);
+        });
+      }
       audio.play().catch((e) => {
         setError(`Playback error: ${e.message}`);
       });
