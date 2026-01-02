@@ -49,6 +49,7 @@ export function useNostrSession({
 
   const ignoreRemoteUntilRef = useRef<number>(0);
   const keysRef = useRef<CachedKeys | null>(null);
+  const prevStatusRef = useRef<SessionStatus>(sessionStatus);
 
   const onSessionStatusChangeRef = useRef(onSessionStatusChange);
 
@@ -58,6 +59,13 @@ export function useNostrSession({
 
   useEffect(() => {
     onSessionStatusChangeRef.current?.(sessionStatus);
+  }, [sessionStatus]);
+
+  useEffect(() => {
+    if (prevStatusRef.current !== "stale" && sessionStatus === "stale") {
+      setSessionNotice("Session taken over by another device.");
+    }
+    prevStatusRef.current = sessionStatus;
   }, [sessionStatus]);
 
   // Sync secret with URL hash changes
@@ -104,6 +112,10 @@ export function useNostrSession({
     ignoreRemoteUntilRef.current = Date.now() + takeoverGraceMs;
   }, [takeoverGraceMs]);
 
+  const clearSessionNotice = useCallback(() => {
+    setSessionNotice(null);
+  }, [setSessionNotice]);
+
   // Subscription for "Stale" detection
   useEffect(() => {
     if (!secret) return;
@@ -113,16 +125,10 @@ export function useNostrSession({
       if (cancelled) return null;
       const cleanup = subscribeToHistory(keys.publicKey, (remoteSid) => {
         if (cancelled) return;
-        // If we see a session ID that is NOT ours, we are stale.
-        if (remoteSid && remoteSid !== localSessionId) {
-          if (Date.now() < ignoreRemoteUntilRef.current) return;
-          setSessionStatus((prev) => {
-            if (prev !== "stale") {
-              setSessionNotice("Session taken over by another device.");
-              return "stale";
-            }
-            return prev;
-          });
+          // If we see a session ID that is NOT ours, we are stale.
+          if (remoteSid && remoteSid !== localSessionId) {
+            if (Date.now() < ignoreRemoteUntilRef.current) return;
+          setSessionStatus((prev) => (prev === "stale" ? prev : "stale"));
         } else if (remoteSid === localSessionId) {
           setSessionStatus("active");
           setSessionNotice(null);
@@ -168,7 +174,6 @@ export function useNostrSession({
         if (cloudData.sessionId !== localSessionId) {
           if (Date.now() < ignoreRemoteUntilRef.current) return;
           setSessionStatus("stale");
-          setSessionNotice("Session taken over by another device.");
         }
       } catch (err) {
         console.debug("Polling error in useNostrSession:", err);
@@ -190,7 +195,7 @@ export function useNostrSession({
     localSessionId,
     setSessionStatus,
     setSessionNotice,
-    clearSessionNotice: () => setSessionNotice(null),
+    clearSessionNotice,
     startTakeoverGrace,
   };
 }

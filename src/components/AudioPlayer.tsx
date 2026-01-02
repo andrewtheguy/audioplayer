@@ -321,6 +321,7 @@ function AudioPlayerInner({
 
   useEffect(() => {
     if (!takeoverEntry) return;
+    // Defer to next tick so the component is mounted before we mutate state/DOM.
     const timeoutId = window.setTimeout(() => {
       loadFromHistory(takeoverEntry, { forceReset: true });
       onTakeoverApplied?.();
