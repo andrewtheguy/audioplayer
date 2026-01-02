@@ -30,9 +30,21 @@ export function closePool(): void {
   pool.close(RELAYS);
 }
 
-// Register cleanup on page unload (browser environment)
+// Register cleanup handlers for browser environment
+// Multiple handlers ensure cleanup runs even if beforeunload is terminated early
 if (typeof window !== "undefined") {
+  // beforeunload: standard unload handler, may be cut short
   window.addEventListener("beforeunload", closePool);
+
+  // pagehide: more reliable than beforeunload for mobile/bfcache scenarios
+  window.addEventListener("pagehide", closePool);
+
+  // visibilitychange: cleanup when tab becomes hidden (covers mobile app switches)
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      closePool();
+    }
+  });
 }
 
 /** Validated payload structure from a Nostr event */
@@ -251,9 +263,41 @@ export interface MergeOptions {
 }
 
 /**
- * Merge cloud history into local history
+ * Merge cloud history into local history.
  * Keep local order, add URLs from cloud that don't exist locally.
  * If preferRemote is true, remote entries replace local entries for the same URL.
+ *
+ * @example Default (no options) - local order preserved, cloud-only URLs appended
+ * ```
+ * local:  [{url:"A", position:10}, {url:"B", position:20}]
+ * cloud:  [{url:"B", position:99, title:"B Title"}, {url:"C", position:30}]
+ * merged: [{url:"A", position:10}, {url:"B", position:20, title:"B Title"}, {url:"C", position:30}]
+ * addedFromCloud: 1, duplicatesSkipped: 1
+ * ```
+ *
+ * @example preferRemote=true - remote data replaces local for same URL
+ * ```
+ * local:  [{url:"A", position:10}, {url:"B", position:20}]
+ * cloud:  [{url:"B", position:99, title:"B Title"}, {url:"C", position:30}]
+ * merged: [{url:"A", position:10}, {url:"B", position:99, title:"B Title"}, {url:"C", position:30}]
+ * addedFromCloud: 1, duplicatesSkipped: 1
+ * ```
+ *
+ * @example preferRemoteOrder=true - remote ordering used, local-only appended
+ * ```
+ * local:  [{url:"A", position:10}, {url:"B", position:20}]
+ * cloud:  [{url:"C", position:30}, {url:"B", position:99}]
+ * merged: [{url:"C", position:30}, {url:"B", position:20}, {url:"A", position:10}]
+ * addedFromCloud: 1, duplicatesSkipped: 1
+ * ```
+ *
+ * @example preferRemote=true, preferRemoteOrder=true - full remote preference
+ * ```
+ * local:  [{url:"A", position:10}, {url:"B", position:20}]
+ * cloud:  [{url:"C", position:30}, {url:"B", position:99}]
+ * merged: [{url:"C", position:30}, {url:"B", position:99}, {url:"A", position:10}]
+ * addedFromCloud: 1, duplicatesSkipped: 1
+ * ```
  */
 export function mergeHistory(
   local: HistoryEntry[],
