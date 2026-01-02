@@ -54,10 +54,12 @@ export function useNostrSession({
   onSessionStatusChange,
   takeoverGraceMs = DEFAULT_TAKEOVER_GRACE_MS,
 }: UseNostrSessionOptions): UseNostrSessionResult {
-  const [{ secret: initialSecret, status: initialStatus, notice: initialNotice }] = useState(computeInitialState);
-  const [secret, setSecret] = useState(initialSecret);
-  const [sessionStatus, setSessionStatus] = useState<SessionStatus>(initialStatus);
-  const [sessionNotice, setSessionNotice] = useState<string | null>(initialNotice);
+  // Compute initial state once using lazy initializer pattern.
+  // Each useState shares the same computed object via closure.
+  const [initial] = useState(computeInitialState);
+  const [secret, setSecret] = useState(initial.secret);
+  const [sessionStatus, setSessionStatus] = useState<SessionStatus>(initial.status);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(initial.notice);
   const [localSessionId] = useState(() => sessionId ?? crypto.randomUUID());
   const [ignoreRemoteUntil, setIgnoreRemoteUntil] = useState<number>(0);
 
