@@ -1,5 +1,6 @@
 import { getPublicKey, generateSecretKey } from "nostr-tools/pure";
 import { encrypt, decrypt, getConversationKey } from "nostr-tools/nip44";
+import { decode as decodeNip19 } from "nostr-tools/nip19";
 import type { HistoryEntry } from "./history";
 
 export interface NostrKeys {
@@ -80,12 +81,21 @@ export function encryptHistory(
   data: HistoryEntry[],
   recipientPublicKey: string
 ): { ciphertext: string; ephemeralPubKey: string } {
+  if (
+    typeof recipientPublicKey !== "string" ||
+    recipientPublicKey.length !== 64 ||
+    !/^[0-9a-fA-F]+$/.test(recipientPublicKey)
+  ) {
+    throw new Error("Invalid recipient public key.");
+  }
+
   const ephemeralPrivKey = generateSecretKey();
   const ephemeralPubKey = getPublicKey(ephemeralPrivKey);
 
   const conversationKey = getConversationKey(ephemeralPrivKey, recipientPublicKey);
   const plaintext = JSON.stringify(data);
   const ciphertext = encrypt(plaintext, conversationKey);
+  ephemeralPrivKey.fill(0);
 
   return { ciphertext, ephemeralPubKey };
 }
@@ -121,6 +131,19 @@ function validateHistoryArray(data: unknown): HistoryEntry[] {
   return data as HistoryEntry[];
 }
 
+function isValidHexPublicKey(value: string): boolean {
+  return value.length === 64 && /^[0-9a-fA-F]+$/.test(value);
+}
+
+function isValidNpub(value: string): boolean {
+  try {
+    const decoded = decodeNip19(value);
+    return decoded.type === "npub" && decoded.data instanceof Uint8Array;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Decrypt history data using NIP-44
  * Validates decryption, JSON parsing, and data structure
@@ -130,6 +153,13 @@ export function decryptHistory(
   senderPublicKey: string,
   recipientPrivateKey: Uint8Array
 ): HistoryEntry[] {
+  if (typeof senderPublicKey !== "string" || senderPublicKey.length === 0) {
+    throw new Error("Invalid senderPublicKey: empty");
+  }
+  if (!isValidHexPublicKey(senderPublicKey) && !isValidNpub(senderPublicKey)) {
+    throw new Error("Invalid senderPublicKey: expected 64-char hex or npub");
+  }
+
   let plaintext: string;
   try {
     const conversationKey = getConversationKey(recipientPrivateKey, senderPublicKey);

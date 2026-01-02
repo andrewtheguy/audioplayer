@@ -44,9 +44,15 @@ export function useNostrSession({
 
   const ignoreRemoteUntilRef = useRef<number>(0);
 
+  const onSessionStatusChangeRef = useRef(onSessionStatusChange);
+
   useEffect(() => {
-    onSessionStatusChange?.(sessionStatus);
-  }, [sessionStatus, onSessionStatusChange]);
+    onSessionStatusChangeRef.current = onSessionStatusChange;
+  }, [onSessionStatusChange]);
+
+  useEffect(() => {
+    onSessionStatusChangeRef.current?.(sessionStatus);
+  }, [sessionStatus]);
 
   // Sync secret with URL hash changes
   useEffect(() => {
@@ -98,7 +104,12 @@ export function useNostrSession({
     };
 
     let cancelled = false;
-    const cleanupPromise = setupSubscription();
+    const cleanupPromise = setupSubscription().catch((err) => {
+      if (!cancelled) {
+        console.error("Failed to setup Nostr subscription:", err);
+      }
+      return null;
+    });
 
     return () => {
       cancelled = true;

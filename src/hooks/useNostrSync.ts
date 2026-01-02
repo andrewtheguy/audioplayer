@@ -120,6 +120,7 @@ export function useNostrSync({
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipNextDirtyRef = useRef(false);
   const hasMountedRef = useRef(false);
+  const performLoadRef = useRef(performLoad);
 
   useEffect(() => {
     historyRef.current = history;
@@ -130,6 +131,10 @@ export function useNostrSync({
   useEffect(() => {
     sessionStatusRef.current = sessionStatus;
   }, [sessionStatus]);
+
+  useEffect(() => {
+    performLoadRef.current = performLoad;
+  }, [performLoad]);
 
   useEffect(() => {
     if (!hasMountedRef.current) {
@@ -301,10 +306,10 @@ export function useNostrSync({
   useEffect(() => {
     if (!secret) return;
     const timeoutId = setTimeout(() => {
-      void performLoad(secret);
+      void performLoadRef.current(secret);
     }, 0);
     return () => clearTimeout(timeoutId);
-  }, [performLoad, secret]);
+  }, [secret]);
 
   useEffect(() => {
     if (!secret || sessionStatus !== "active" || !dirtyRef.current) return;

@@ -53,6 +53,11 @@ export function NostrSyncPanel({
 
   const isLoading = status === "saving" || status === "loading";
   const displayMessage = sessionNotice ?? message;
+  const showTimestamp =
+    status === "success" &&
+    lastOperation?.type &&
+    lastOperation.type !== "loaded" &&
+    sessionStatus !== "stale";
 
   const handleGenerate = () => {
     const newSecret = generateSecret();
@@ -163,7 +168,7 @@ export function NostrSyncPanel({
           )}
         >
           {displayMessage}
-          {status === "success" && lastOperation && lastOperation.type !== 'loaded' && sessionStatus !== 'stale' && (
+          {showTimestamp && (
             <span className="block mt-1 opacity-75 text-[10px]">
               {lastOperation.type === "saved" ? "Saved" : "Loaded"} at {lastOperation.timestamp}
             </span>
