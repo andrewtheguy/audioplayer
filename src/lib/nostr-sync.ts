@@ -96,12 +96,15 @@ export async function loadHistoryFromNostr(
   userPrivateKey: Uint8Array,
   userPublicKey: string
 ): Promise<HistoryEntry[] | null> {
-  const events = await pool.querySync(RELAYS, {
-    kinds: [KIND_HISTORY],
-    authors: [userPublicKey],
-    "#d": [D_TAG],
-    limit: 1,
-  });
+  const events = await pool.querySync(
+    RELAYS,
+    {
+      kinds: [KIND_HISTORY],
+      authors: [userPublicKey],
+      "#d": [D_TAG],
+      limit: 1,
+    }
+  );
 
   if (events.length === 0) {
     return null;

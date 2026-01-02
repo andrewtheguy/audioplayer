@@ -1,7 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { deriveNostrKeysFromPin, generatePin } from "@/lib/pin-crypto";
+import { deriveNostrKeys, generateSecret } from "@/lib/pin-crypto";
 import {
   saveHistoryToNostr,
   loadHistoryFromNostr,
@@ -16,7 +15,6 @@ interface NostrSyncPanelProps {
 }
 
 type SyncStatus = "idle" | "saving" | "loading" | "success" | "error";
-type ViewState = "input" | "generated" | "copied";
 
 interface LastOperation {
   type: "saved" | "loaded";
@@ -25,12 +23,12 @@ interface LastOperation {
 }
 
 /**
- * Generate a fingerprint from PIN using SHA256 hash prefix.
+ * Generate a fingerprint from secret using SHA256 hash prefix.
  * Returns first 8 hex characters formatted as xxxx-xxxx.
  */
-async function getPinFingerprint(pin: string): Promise<string> {
+async function getSecretFingerprint(secret: string): Promise<string> {
   const encoder = new TextEncoder();
-  const data = encoder.encode(pin);
+  const data = encoder.encode(secret);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
@@ -80,59 +78,164 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/**
+ * Get the secret directly from the URL hash.
+ * Removes the '#' prefix if present.
+ */
+function getSecretFromHash(): string {
+  if (typeof window === "undefined") return "";
+  const hash = window.location.hash;
+  return hash.startsWith("#") ? hash.slice(1) : hash;
+}
+
 export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps) {
-  const [pin, setPin] = useState("");
-  const [generatedPin, setGeneratedPin] = useState<string | null>(null);
-  const [viewState, setViewState] = useState<ViewState>("input");
+  const [secret, setSecret] = useState(getSecretFromHash());
   const [status, setStatus] = useState<SyncStatus>("idle");
   const [message, setMessage] = useState<string | null>(null);
   const [lastOperation, setLastOperation] = useState<LastOperation | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
 
-  const handleGenerate = () => {
-    const newPin = generatePin();
-    setGeneratedPin(newPin);
-    setViewState("generated");
-    setMessage(null);
-    setStatus("idle");
-  };
+  // Keep refs for props to ensure performLoad is stable and doesn't trigger effect loops
+  const historyRef = useRef(history);
+  const onHistoryLoadedRef = useRef(onHistoryLoaded);
 
-  const handleCopy = async () => {
-    if (!generatedPin) return;
+  useEffect(() => {
+    historyRef.current = history;
+    onHistoryLoadedRef.current = onHistoryLoaded;
+  }, [history, onHistoryLoaded]);
+
+  // Load logic extracted to be reusable
+  const performLoad = useCallback(async (currentSecret: string) => {
+    if (!currentSecret) return;
+
+    setStatus("loading");
+    setMessage("Syncing...");
 
     try {
-      await navigator.clipboard.writeText(generatedPin);
-      setGeneratedPin(null);
-      setViewState("copied");
-      setMessage("PIN copied! Paste it below to sync.");
-      setStatus("success");
+      const keys = await withTimeout(
+        deriveNostrKeys(currentSecret),
+        OPERATION_TIMEOUT_MS
+      );
+      const cloudHistory = await withTimeout(
+        loadHistoryFromNostr(keys.privateKey, keys.publicKey),
+        OPERATION_TIMEOUT_MS
+      );
+
+      const fingerprint = await getSecretFingerprint(currentSecret);
+      setLastOperation({
+        type: "loaded",
+        fingerprint,
+        timestamp: formatTimestamp(new Date()),
+      });
+      if (cloudHistory) {
+        // Use refs to get latest values
+        const result = mergeHistory(historyRef.current, cloudHistory);
+        onHistoryLoadedRef.current(result.merged);
+        setStatus("success");
+        setMessage(
+          result.addedFromCloud > 0
+            ? `Added ${result.addedFromCloud} entries from cloud`
+            : "History is up to date"
+        );
+      } else {
+        setStatus("success");
+        setMessage("Ready to save (no history found)");
+      }
+    } catch (err) {
+      setStatus("error");
+      if (err instanceof TimeoutError) {
+        setMessage("Load timed out. Check your connection and try again.");
+      } else {
+        setMessage(err instanceof Error ? err.message : "Failed to load");
+      }
+    }
+  }, []); // Stable dependency
+
+  // Sync state with URL hash and auto-load on change
+  useEffect(() => {
+    const handleHashChange = () => {
+      const newSecret = getSecretFromHash();
+      setSecret(newSecret);
+      if (newSecret) {
+        performLoad(newSecret);
+      } else {
+        // Reset state if hash is cleared
+        setStatus("idle");
+        setMessage(null);
+        setLastOperation(null);
+      }
+    };
+
+    window.addEventListener("hashchange", handleHashChange);
+    
+    // Initial check on mount
+    const initialSecret = getSecretFromHash();
+    if (initialSecret) {
+      // Use setTimeout to avoid "setState in effect" warning and ensure async execution
+      setTimeout(() => {
+        performLoad(initialSecret);
+      }, 0);
+    }
+
+    return () => {
+      window.removeEventListener("hashchange", handleHashChange);
+    };
+  }, [performLoad]);
+
+  const handleGenerate = () => {
+    const newSecret = generateSecret();
+    window.location.hash = newSecret;
+    // The hashchange listener will pick this up and trigger state update + load
+  };
+
+  const handleCopyLink = async () => {
+    if (!secret) return;
+    const url = window.location.href;
+
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+      
+      // If we are in success state, keep the message, otherwise show temporary copy feedback
+      if (status !== 'success') {
+          setMessage("Link copied to clipboard!");
+          // Reset message after delay if it was just the copy confirmation
+          setTimeout(() => {
+              // We need to check the current status via a ref or functional update if we were inside the effect,
+              // but here we just want to clear if it hasn't changed to something important.
+              // However, since we can't easily check 'current' status inside timeout without refs,
+              // we'll just clear if the message is still the copy message.
+              setMessage((prev) => prev === "Link copied to clipboard!" ? null : prev);
+          }, 3000);
+      }
     } catch {
-      setMessage("Failed to copy to clipboard");
+      setMessage("Failed to copy link");
       setStatus("error");
     }
   };
 
   const handleSave = async () => {
-    if (!pin) {
+    if (!secret) {
       setStatus("error");
-      setMessage("Please enter your PIN");
+      setMessage("No secret found in URL");
       return;
     }
 
     setStatus("saving");
-    setMessage(null);
+    setMessage("Saving...");
 
     try {
       const keys = await withTimeout(
-        deriveNostrKeysFromPin(pin),
+        deriveNostrKeys(secret),
         OPERATION_TIMEOUT_MS
       );
       await withTimeout(
         saveHistoryToNostr(history, keys.privateKey, keys.publicKey),
         OPERATION_TIMEOUT_MS
       );
-      const fingerprint = await getPinFingerprint(pin);
-      setPin("");
+      const fingerprint = await getSecretFingerprint(secret);
       setLastOperation({
         type: "saved",
         fingerprint,
@@ -150,150 +253,75 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
     }
   };
 
-  const handleLoad = async () => {
-    if (!pin) {
-      setStatus("error");
-      setMessage("Please enter your PIN");
-      return;
-    }
-
-    setStatus("loading");
-    setMessage(null);
-
-    try {
-      const keys = await withTimeout(
-        deriveNostrKeysFromPin(pin),
-        OPERATION_TIMEOUT_MS
-      );
-      const cloudHistory = await withTimeout(
-        loadHistoryFromNostr(keys.privateKey, keys.publicKey),
-        OPERATION_TIMEOUT_MS
-      );
-
-      const fingerprint = await getPinFingerprint(pin);
-      setPin("");
-      setLastOperation({
-        type: "loaded",
-        fingerprint,
-        timestamp: formatTimestamp(new Date()),
-      });
-      if (cloudHistory) {
-        const result = mergeHistory(history, cloudHistory);
-        onHistoryLoaded(result.merged);
-        setStatus("success");
-        setMessage(
-          result.addedFromCloud > 0
-            ? `Added ${result.addedFromCloud} entries from cloud`
-            : "History is up to date"
-        );
-      } else {
-        setStatus("success");
-        setMessage("No history found on Nostr");
-      }
-    } catch (err) {
-      setStatus("error");
-      if (err instanceof TimeoutError) {
-        setMessage("Load timed out. Check your connection and try again.");
-      } else {
-        setMessage(err instanceof Error ? err.message : "Failed to load");
-      }
-    }
-  };
-
   const isLoading = status === "saving" || status === "loading";
 
   return (
     <div className="border-t pt-3 mt-3 space-y-2">
-      <div className="text-xs font-medium text-muted-foreground">
-        Nostr Sync
+      <div className="text-xs font-medium text-muted-foreground flex justify-between items-center">
+        <span>Nostr Sync</span>
+        {secret && (
+             <span className="font-mono text-[10px] opacity-70" title="Your secret key is in the URL">
+                 Connected via URL
+             </span>
+        )}
       </div>
 
-      {/* Generated PIN display */}
-      {viewState === "generated" && generatedPin && (
+      {!secret ? (
         <div className="space-y-2">
-          <div className="flex items-center gap-2 p-2 bg-muted rounded-md">
-            <code className="flex-1 text-xs font-mono select-all">
-              {generatedPin}
-            </code>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleCopy}
-              className="h-6 text-xs"
-            >
-              Copy
-            </Button>
-          </div>
-          <div className="text-xs text-amber-600 dark:text-amber-500">
-            Save this PIN in your password manager. It cannot be recovered.
-          </div>
-        </div>
-      )}
-
-      {/* Input state or after copy */}
-      {(viewState === "input" || viewState === "copied") && (
-        <>
+            <div className="text-xs text-muted-foreground">
+                Generate a secret link to sync your history across devices.
+            </div>
           <Button
             size="sm"
             variant="outline"
             onClick={handleGenerate}
             disabled={isLoading}
-            className="h-7 text-xs"
+            className="w-full h-8 text-xs"
           >
-            Generate New PIN
+            Generate Secret Link
           </Button>
-
-          <div className="text-xs text-muted-foreground">
-            Or paste existing PIN:
-          </div>
-
+        </div>
+      ) : (
+        <div className="space-y-2">
           <div className="flex items-center gap-2">
-            <Input
-              type="password"
-              placeholder="Paste your PIN"
-              value={pin}
-              onChange={(e) => {
-                setPin(e.target.value);
-                if (viewState === "copied") {
-                  setViewState("input");
-                  setMessage(null);
-                }
-              }}
-              className="flex-1 h-7 text-xs font-mono"
-              disabled={isLoading}
-            />
             <Button
               size="sm"
               variant="outline"
               onClick={handleSave}
-              disabled={isLoading || !pin}
-              className="h-7 text-xs"
+              disabled={isLoading}
+              className="flex-1 h-8 text-xs bg-primary/5 hover:bg-primary/10 border-primary/20"
             >
-              {status === "saving" ? "..." : "Save"}
+              {status === "saving" ? "Saving..." : "Save to Cloud"}
             </Button>
+            
             <Button
               size="sm"
               variant="outline"
-              onClick={handleLoad}
-              disabled={isLoading || !pin}
-              className="h-7 text-xs"
+              onClick={handleCopyLink}
+              className="h-8 text-xs px-3"
+              title="Copy link to share or save"
             >
-              {status === "loading" ? "..." : "Load"}
+               {copiedLink ? <CheckIcon className="w-3.5 h-3.5 mr-1" /> : <LinkIcon className="w-3.5 h-3.5 mr-1" />}
+               {copiedLink ? "Copied" : "Copy Link"}
             </Button>
           </div>
-        </>
+          
+           <div className="text-[10px] text-muted-foreground text-center px-1">
+             Bookmark this URL to access your history on other devices.
+           </div>
+        </div>
       )}
 
       {message && (
         <div
-          className={`text-xs ${
-            status === "error" ? "text-destructive" : "text-muted-foreground"
+          className={`text-xs p-2 rounded-md bg-muted/50 ${
+            status === "error" ? "text-destructive bg-destructive/5 border border-destructive/10" : "text-muted-foreground"
           }`}
         >
           {message}
-          {status === "success" && lastOperation && (
-            <span className="block mt-1 opacity-75">
-              {lastOperation.type === "saved" ? "Saved" : "Loaded"} with PIN w/fingerprint <code className="text-sky-600 dark:text-sky-400 font-mono">{lastOperation.fingerprint}</code> at {lastOperation.timestamp}
+          {status === "success" && lastOperation && lastOperation.type !== 'loaded' && (
+            <span className="block mt-1 opacity-75 text-[10px]">
+              {lastOperation.type === "saved" ? "Saved" : "Loaded"} at {lastOperation.timestamp}
             </span>
           )}
         </div>
@@ -321,9 +349,47 @@ export function NostrSyncPanel({ history, onHistoryLoaded }: NostrSyncPanelProps
                 </li>
               ))}
             </ul>
+             {secret && (
+                <div className="pt-2">
+                    <div className="font-medium">Secret Fingerprint:</div>
+                    <code className="font-mono text-[10px] block mt-0.5 select-all">
+                        {lastOperation?.fingerprint || "..."}
+                    </code>
+                </div>
+            )}
           </div>
         )}
       </div>
     </div>
+  );
+}
+
+function LinkIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
   );
 }
