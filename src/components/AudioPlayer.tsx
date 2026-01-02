@@ -165,12 +165,14 @@ function AudioPlayerInner({
   }, [gainEnabled, setupGainNode]);
 
   // Save history entry with an explicit position (skip for live streams)
-  const saveHistoryEntry = useCallback((position?: number) => {
+  const saveHistoryEntry = useCallback((position?: number, options?: { allowLive?: boolean }) => {
     const audio = audioRef.current;
     if (!audio || !currentUrlRef.current) return;
     const resolvedPosition = position ?? audio.currentTime;
     if (!isFinite(resolvedPosition)) return;
-    if (isLiveStreamRef.current) return; // Don't save position for live streams
+    if (isLiveStreamRef.current && !options?.allowLive) {
+      return; // Don't save position for live streams unless explicitly allowed
+    }
 
     setHistory((prev) => {
       const existingIndex = prev.findIndex((h) => h.url === currentUrlRef.current);
@@ -394,7 +396,7 @@ function AudioPlayerInner({
       setUrl("");
       setShowLoadInputs(false);
       // Add to history immediately upon load success
-      saveHistoryEntry(0);
+      saveHistoryEntry(0, { allowLive: true });
     };
 
     if (urlToLoad.includes(".m3u8")) {
