@@ -299,6 +299,7 @@ function AudioPlayerInner({
       setNowPlayingTitle(entry.title ?? null);
       setIsEditingNowPlaying(false);
       setNowPlayingTitleDraft("");
+      setTitle("");
       setUrl("");
       setShowLoadInputs(false);
     };
@@ -409,6 +410,7 @@ function AudioPlayerInner({
       setNowPlayingTitle(resolvedTitle ?? null);
       setIsEditingNowPlaying(false);
       setNowPlayingTitleDraft("");
+      setTitle("");
       setUrl("");
       setShowLoadInputs(false);
       // Add to history immediately upon load success
@@ -1077,17 +1079,17 @@ function AudioPlayerInner({
             </button>
             {historyExpanded && (
               <>
-                <div className="max-h-48 overflow-y-auto space-y-1 border rounded-md p-2">
+                <div className="max-h-48 overflow-y-auto divide-y divide-border/60 border rounded-md">
                   {history.map((entry) => (
                     <div
                       key={entry.url}
                       onClick={() =>
                         !isSessionStale && editingUrl !== entry.url && handleHistorySelect(entry)
                       }
-                      className={`flex items-center justify-between p-2 rounded group ${
+                      className={`flex items-start justify-between px-3 py-2 group ${
                         isSessionStale
                           ? "cursor-not-allowed opacity-60"
-                          : "hover:bg-accent cursor-pointer"
+                          : "hover:bg-accent/60 cursor-pointer"
                       }`}
                     >
                       <div className="flex-1 min-w-0 mr-2">
@@ -1136,7 +1138,11 @@ function AudioPlayerInner({
                           {formatDate(entry.lastPlayedAt)} &middot; {formatTime(entry.position)}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
+                      <div
+                        className={`flex items-center gap-1 shrink-0 ${
+                          entry.title || editingUrl === entry.url ? "mt-0.5" : ""
+                        }`}
+                      >
                         <Button
                           variant="ghost"
                           size="sm"
@@ -1153,7 +1159,11 @@ function AudioPlayerInner({
                           className={`h-6 w-6 p-0 ${editingUrl === entry.url ? "opacity-100 text-foreground" : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground"} disabled:cursor-not-allowed`}
                           title={editingUrl === entry.url ? "Save title" : "Edit title"}
                         >
-                          <EditIcon className="w-4 h-4" />
+                          {editingUrl === entry.url ? (
+                            <CheckIcon className="w-4 h-4" />
+                          ) : (
+                            <EditIcon className="w-4 h-4" />
+                          )}
                         </Button>
                         <Button
                           variant="ghost"
