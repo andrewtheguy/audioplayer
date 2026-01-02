@@ -154,6 +154,14 @@ export function subscribeToHistory(
   userPublicKey: string,
   onEvent: (sessionId: string | null) => void
 ): () => void {
+  const canSetOnError = (
+    value: unknown
+  ): value is { onerror?: (err: unknown) => void } => {
+    if (!value || typeof value !== "object") return false;
+    const maybe = value as { onerror?: unknown };
+    return typeof maybe.onerror === "undefined" || typeof maybe.onerror === "function";
+  };
+
   try {
     const sub = pool.subscribeMany(
       RELAYS,
@@ -174,8 +182,8 @@ export function subscribeToHistory(
       }
     );
 
-    if ("onerror" in sub) {
-      (sub as { onerror?: (err: unknown) => void }).onerror = (err) => {
+    if (canSetOnError(sub)) {
+      sub.onerror = (err) => {
         console.error("Nostr history subscription error:", err);
       };
     }

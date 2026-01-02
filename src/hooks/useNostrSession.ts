@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { deriveNostrKeys } from "@/lib/nostr-crypto";
 import { loadHistoryFromNostr, subscribeToHistory } from "@/lib/nostr-sync";
 
@@ -22,6 +22,11 @@ interface UseNostrSessionResult {
   startTakeoverGrace: () => void;
 }
 
+interface CachedKeys {
+  privateKey: Uint8Array;
+  publicKey: string;
+}
+
 const DEFAULT_TAKEOVER_GRACE_MS = 15000;
 const DEFAULT_SESSION_POLL_MS = 6000;
 
@@ -43,6 +48,7 @@ export function useNostrSession({
   const [localSessionId] = useState(() => sessionId ?? crypto.randomUUID());
 
   const ignoreRemoteUntilRef = useRef<number>(0);
+  const keysRef = useRef<CachedKeys | null>(null);
 
   const onSessionStatusChangeRef = useRef(onSessionStatusChange);
 
@@ -72,9 +78,31 @@ export function useNostrSession({
     };
   }, []);
 
-  const startTakeoverGrace = () => {
+  useEffect(() => {
+    let cancelled = false;
+    keysRef.current = null;
+    if (!secret) return () => undefined;
+    void deriveNostrKeys(secret)
+      .then((keys) => {
+        if (!cancelled) {
+          keysRef.current = keys;
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error("Failed to derive Nostr keys for polling:", err);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      keysRef.current = null;
+    };
+  }, [secret]);
+
+  const startTakeoverGrace = useCallback(() => {
     ignoreRemoteUntilRef.current = Date.now() + takeoverGraceMs;
-  };
+  }, [takeoverGraceMs]);
 
   // Subscription for "Stale" detection
   useEffect(() => {
@@ -130,7 +158,8 @@ export function useNostrSession({
     let cancelled = false;
     const checkSession = async () => {
       try {
-        const keys = await deriveNostrKeys(secret);
+        const keys = keysRef.current;
+        if (!keys) return;
         const cloudData = await loadHistoryFromNostr(
           keys.privateKey,
           keys.publicKey

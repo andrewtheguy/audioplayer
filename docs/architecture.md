@@ -123,6 +123,9 @@ Nostr protocol integration for cloud sync.
 - Kind: 30078 (application-specific replaceable)
 - d-tag: "audioplayer-history"
 - session tag: unique session ID for multi-device coordination
+  - ✅ **Current:** UUIDv4 generated via `crypto.randomUUID()` per client session.
+  - ⚠️ **Intended (Roadmap):** Namespaced, high-entropy IDs (UUIDv4 is acceptable) with publish-time collision checks: if an existing event contains the same session tag, regenerate and republish. Optional per-user namespace prefix to avoid cross-URL collisions.
+  - ⚠️ **Stale-session detection/cleanup (Roadmap):** include a `last_seen`/heartbeat timestamp in event tags or content. Emit a heartbeat every 30s; mark sessions inactive after 2 minutes without heartbeat. A periodic reconciler (every 30–60s) should mark stale sessions and prefer active ones; takeover should require explicit user confirmation if a different active session is detected. All intervals/timeouts should be configurable in one place.
 
 **Key functions:**
 - `saveHistoryToNostr()`: Encrypts and publishes history

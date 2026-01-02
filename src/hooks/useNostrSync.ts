@@ -85,13 +85,7 @@ async function getSecretFingerprint(secret: string): Promise<string> {
 }
 
 function formatTimestamp(date: Date): string {
-  return date.toLocaleString([], {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return date.toISOString();
 }
 
 export function useNostrSync({
@@ -120,9 +114,25 @@ export function useNostrSync({
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipNextDirtyRef = useRef(false);
   const hasMountedRef = useRef(false);
+  const mountedRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
   const performLoadRef = useRef<
     ((currentSecret: string, isTakeOver?: boolean) => Promise<void>) | null
   >(null);
+
+  const isActive = useCallback(
+    () => mountedRef.current && !abortRef.current?.signal.aborted,
+    []
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    abortRef.current = new AbortController();
+    return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     historyRef.current = history;
@@ -152,7 +162,7 @@ export function useNostrSync({
       historyToSave: HistoryEntry[],
       options?: { allowStale?: boolean }
     ) => {
-      if (!currentSecret) return false;
+      if (!currentSecret || !isActive()) return false;
 
       const shouldBlockSave = () =>
         sessionStatusRef.current === "stale" && !options?.allowStale;
@@ -167,10 +177,12 @@ export function useNostrSync({
           deriveNostrKeys(currentSecret),
           operationTimeoutMs
         );
+        if (!isActive()) return false;
         if (shouldBlockSave()) {
           console.warn("Session became stale before save. Ignoring.");
           return false;
         }
+        if (!isActive()) return false;
         setStatus("saving");
         await withTimeout(
           saveHistoryToNostr(
@@ -181,7 +193,9 @@ export function useNostrSync({
           ),
           operationTimeoutMs
         );
+        if (!isActive()) return false;
         const fingerprint = await getSecretFingerprint(currentSecret);
+        if (!isActive()) return false;
         setLastOperation({
           type: "saved",
           fingerprint,
@@ -192,6 +206,7 @@ export function useNostrSync({
         dirtyRef.current = false;
         return true;
       } catch (err) {
+        if (!isActive()) return false;
         setStatus("error");
         if (err instanceof TimeoutError) {
           setMessage("Save timed out. Check connection.");
@@ -201,7 +216,7 @@ export function useNostrSync({
         return false;
       }
     },
-    [localSessionId, operationTimeoutMs]
+    [isActive, localSessionId, operationTimeoutMs]
   );
 
   const detectStaleSession = useCallback(
@@ -211,12 +226,13 @@ export function useNostrSync({
   );
 
   const handleStaleSession = useCallback(() => {
+    if (!isActive()) return;
     setSessionStatus("stale");
     setStatus("success");
     setSessionNotice(
       "Another session is active — viewing in read-only mode. Take over to edit."
     );
-  }, [setSessionStatus, setSessionNotice]);
+  }, [isActive, setSessionNotice, setSessionStatus]);
 
   const mergeAndNotify = useCallback(
     (cloudHistory: HistoryEntry[], isTakeOver: boolean) => {
@@ -242,6 +258,7 @@ export function useNostrSync({
       remoteSid?: string,
       isStaleRemote?: boolean
     ) => {
+      if (!isActive()) return;
       setStatus("success");
       dirtyRef.current = false;
       if (!isStaleRemote) {
@@ -262,12 +279,12 @@ export function useNostrSync({
         }
       }
     },
-    [clearSessionNotice, localSessionId, performSave, setSessionStatus]
+    [clearSessionNotice, isActive, localSessionId, performSave, setSessionStatus]
   );
 
   const performLoad = useCallback(
     async (currentSecret: string, isTakeOver = false) => {
-      if (!currentSecret) return;
+      if (!currentSecret || !isActive()) return;
 
       setStatus("loading");
       setMessage("Syncing...");
@@ -280,12 +297,15 @@ export function useNostrSync({
           deriveNostrKeys(currentSecret),
           operationTimeoutMs
         );
+        if (!isActive()) return;
         const cloudData = await withTimeout(
           loadHistoryFromNostr(keys.privateKey, keys.publicKey),
           operationTimeoutMs
         );
+        if (!isActive()) return;
 
         const fingerprint = await getSecretFingerprint(currentSecret);
+        if (!isActive()) return;
         setLastOperation({
           type: "loaded",
           fingerprint,
@@ -305,6 +325,7 @@ export function useNostrSync({
           }
 
           const result = mergeAndNotify(cloudHistory, isTakeOver);
+          if (!isActive()) return;
           updateSessionStateAndMaybeSave(
             currentSecret,
             result,
@@ -313,6 +334,7 @@ export function useNostrSync({
             isStaleRemote
           );
         } else {
+          if (!isActive()) return;
           setStatus("success");
           setSessionStatus("active");
           clearSessionNotice();
@@ -321,6 +343,7 @@ export function useNostrSync({
           void performSave(currentSecret, historyRef.current, { allowStale: true });
         }
       } catch (err) {
+        if (!isActive()) return;
         setStatus("error");
         if (err instanceof TimeoutError) {
           setMessage("Load timed out. Check your connection and try again.");
@@ -333,6 +356,7 @@ export function useNostrSync({
       clearSessionNotice,
       detectStaleSession,
       handleStaleSession,
+      isActive,
       localSessionId,
       mergeAndNotify,
       operationTimeoutMs,
