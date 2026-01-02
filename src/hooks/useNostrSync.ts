@@ -4,7 +4,7 @@ import {
   loadHistoryFromNostr,
   mergeHistory,
   saveHistoryToNostr,
-  subscribeToHistory,
+  subscribeToHistoryDetailed,
 } from "@/lib/nostr-sync";
 import type { HistoryEntry } from "@/lib/history";
 import type { SessionStatus } from "@/hooks/useNostrSession";
@@ -125,6 +125,7 @@ export function useNostrSync({
   const mountedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const followRemoteInFlightRef = useRef(false);
+  const lastRemoteCreatedAtRef = useRef(0);
   const performLoadRef = useRef<
     ((
       currentSecret: string,
@@ -345,7 +346,12 @@ export function useNostrSync({
         });
 
         if (cloudData) {
-          const { history: cloudHistory, sessionId: remoteSid } = cloudData;
+          const { history: cloudHistory, sessionId: remoteSid, createdAt } = cloudData;
+          if (createdAt > lastRemoteCreatedAtRef.current) {
+            lastRemoteCreatedAtRef.current = createdAt;
+          } else if (followRemote) {
+            return;
+          }
 
           const isStaleRemote = detectStaleSession(
             isTakeOver,
@@ -421,19 +427,17 @@ export function useNostrSync({
     const setupSubscription = async () => {
       const keys = await deriveNostrKeys(secret);
       if (cancelled) return null;
-      const cleanup = subscribeToHistory(keys.publicKey, () => {
-        if (cancelled) return;
-        if (followRemoteInFlightRef.current) return;
-        followRemoteInFlightRef.current = true;
-        void performLoadRef
-          .current?.(secret, false, {
-            followRemote: true,
-            silent: true,
-          })
-          .finally(() => {
-            followRemoteInFlightRef.current = false;
-          });
-      });
+      const cleanup = subscribeToHistoryDetailed(
+        keys.publicKey,
+        keys.privateKey,
+        (data) => {
+          if (cancelled) return;
+          if (data.sessionId && data.sessionId === localSessionId) return;
+          if (data.createdAt <= lastRemoteCreatedAtRef.current) return;
+          lastRemoteCreatedAtRef.current = data.createdAt;
+          mergeAndNotify(data.history, false, true);
+        }
+      );
       return cleanup;
     };
 
@@ -453,6 +457,26 @@ export function useNostrSync({
         .catch(() => {
           // Ignore subscription setup failures on teardown.
         });
+    };
+  }, [secret, sessionStatus, mergeAndNotify, localSessionId]);
+
+  useEffect(() => {
+    if (!secret || sessionStatus !== "stale") return;
+    let cancelled = false;
+    const intervalId = window.setInterval(() => {
+      if (cancelled) return;
+      if (followRemoteInFlightRef.current) return;
+      followRemoteInFlightRef.current = true;
+      void performLoadRef
+        .current?.(secret, false, { followRemote: true, silent: true })
+        .finally(() => {
+          followRemoteInFlightRef.current = false;
+        });
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
     };
   }, [secret, sessionStatus]);
 

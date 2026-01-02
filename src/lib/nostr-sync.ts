@@ -120,7 +120,7 @@ export async function loadHistoryFromNostr(
   userPrivateKey: Uint8Array,
   userPublicKey: string,
   signal?: AbortSignal
-): Promise<{ history: HistoryEntry[]; sessionId: string | null } | null> {
+): Promise<{ history: HistoryEntry[]; sessionId: string | null; createdAt: number } | null> {
   throwIfAborted(signal);
   const events = await pool.querySync(
     RELAYS,
@@ -164,7 +164,7 @@ export async function loadHistoryFromNostr(
     payload.ephemeralPubKey,
     userPrivateKey
   );
-  return { history, sessionId };
+  return { history, sessionId, createdAt: latest.created_at };
 }
 
 /**
@@ -196,6 +196,77 @@ export function subscribeToHistory(
           try {
             const sessionTag = event.tags.find((t) => t[0] === "session");
             onEvent(sessionTag ? sessionTag[1] : null);
+          } catch (err) {
+            console.error("Nostr history event handler failed:", err);
+          }
+        },
+      }
+    );
+
+    if (canSetOnError(sub)) {
+      sub.onerror = (err) => {
+        console.error("Nostr history subscription error:", err);
+      };
+    }
+
+    return () => {
+      sub.close();
+    };
+  } catch (err) {
+    console.error("Failed to subscribe to Nostr history:", err);
+    return () => {};
+  }
+}
+
+export function subscribeToHistoryDetailed(
+  userPublicKey: string,
+  userPrivateKey: Uint8Array,
+  onEvent: (data: { history: HistoryEntry[]; sessionId: string | null; createdAt: number }) => void
+): () => void {
+  const canSetOnError = (
+    value: unknown
+  ): value is { onerror?: (err: unknown) => void } => {
+    if (!value || typeof value !== "object") return false;
+    const maybe = value as { onerror?: unknown };
+    return typeof maybe.onerror === "undefined" || typeof maybe.onerror === "function";
+  };
+
+  try {
+    const sub = pool.subscribeMany(
+      RELAYS,
+      {
+        kinds: [KIND_HISTORY],
+        authors: [userPublicKey],
+        "#d": [D_TAG],
+      },
+      {
+        onevent: (event) => {
+          try {
+            let payload: unknown;
+            try {
+              payload = JSON.parse(event.content);
+            } catch {
+              throw new Error("Event content is not valid JSON. Data may be corrupted.");
+            }
+
+            if (!isValidPayload(payload)) {
+              throw new Error(
+                "Invalid payload structure: missing or invalid ephemeralPubKey/ciphertext fields"
+              );
+            }
+
+            const history = decryptHistory(
+              payload.ciphertext,
+              payload.ephemeralPubKey,
+              userPrivateKey
+            );
+
+            const sessionTag = event.tags.find((t) => t[0] === "session");
+            onEvent({
+              history,
+              sessionId: sessionTag ? sessionTag[1] : null,
+              createdAt: event.created_at,
+            });
           } catch (err) {
             console.error("Nostr history event handler failed:", err);
           }
