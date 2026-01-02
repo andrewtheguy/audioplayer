@@ -138,7 +138,11 @@ function isValidHexPublicKey(value: string): boolean {
 function isValidNpub(value: string): boolean {
   try {
     const decoded = decodeNip19(value);
-    return decoded.type === "npub" && decoded.data instanceof Uint8Array;
+    return (
+      decoded.type === "npub" &&
+      typeof decoded.data === "string" &&
+      isValidHexPublicKey(decoded.data)
+    );
   } catch {
     return false;
   }
