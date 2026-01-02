@@ -115,7 +115,7 @@ function AudioPlayerInner({
   const [isLiveStream, setIsLiveStream] = useState(false);
   const [gainEnabled, setGainEnabled] = useState(false);
   const [gain, setGain] = useState(1); // 1 = 100%
-  const [isSessionStale, setIsSessionStale] = useState(false);
+  const [isViewOnly, setIsViewOnly] = useState(false);
   const [actualSessionStatus, setActualSessionStatus] = useState<"idle" | "active" | "stale" | "invalid" | "unknown">("unknown");
   const [editingUrl, setEditingUrl] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
@@ -123,7 +123,7 @@ function AudioPlayerInner({
   const shouldShowLoadInputs = !nowPlayingUrl || showLoadInputs;
   const [isEditingNowPlaying, setIsEditingNowPlaying] = useState(false);
   const [nowPlayingTitleDraft, setNowPlayingTitleDraft] = useState("");
-  const wasSessionStaleRef = useRef(false);
+  const wasViewOnlyRef = useRef(false);
 
   // Keep refs in sync with state for use in callbacks
   useEffect(() => {
@@ -564,7 +564,7 @@ function AudioPlayerInner({
     const entry = remoteHistory[0];
     if (!entry) return;
 
-    if (isSessionStale) {
+    if (isViewOnly) {
       currentUrlRef.current = entry.url;
       currentTitleRef.current = entry.title;
       setNowPlayingUrl(entry.url);
@@ -817,14 +817,16 @@ function AudioPlayerInner({
 
   const showLiveCta = isLiveStream && !isPlaying;
   const handleSessionStatusChange = useCallback((status: "idle" | "active" | "stale" | "invalid" | "unknown") => {
-    // idle, stale, and invalid are read-only states that disable controls
-    // - idle: viewing mode, user can still listen but not control playback
-    // - stale: another device took over, must cleanup resources
-    // - invalid: bad checksum, never loaded resources, nothing to cleanup
-    setIsSessionStale(status === "stale" || status === "idle" || status === "invalid");
+    // View-only states: disable controls and unmount audio element
+    // - idle: arrived with valid secret, view synced history (no resources to cleanup - just loaded)
+    // - stale: another device took over, must cleanup resources before becoming view-only
+    // - invalid: bad checksum on load, nothing ever loaded (no resources to cleanup)
+    // Note: idle and invalid can only be reached from states without active resources,
+    // so cleanup is only needed for stale (the active→stale transition).
+    setIsViewOnly(status === "stale" || status === "idle" || status === "invalid");
     setActualSessionStatus(status);
     if (status === "stale") {
-      // Only stale needs cleanup - idle preserves playback, invalid never had resources
+      // Cleanup resources before transitioning to view-only mode
       const audio = audioRef.current;
       if (audio && !audio.paused) {
         audio.pause();
@@ -858,12 +860,12 @@ function AudioPlayerInner({
   }, []);
 
   useEffect(() => {
-    if (isSessionStale) {
-      wasSessionStaleRef.current = true;
+    if (isViewOnly) {
+      wasViewOnlyRef.current = true;
       return;
     }
-    if (!wasSessionStaleRef.current) return;
-    wasSessionStaleRef.current = false;
+    if (!wasViewOnlyRef.current) return;
+    wasViewOnlyRef.current = false;
     const entry =
       (nowPlayingUrl && history.find((item) => item.url === nowPlayingUrl)) ||
       history[0];
@@ -874,7 +876,7 @@ function AudioPlayerInner({
     return () => {
       clearTimeout(timeoutId);
     };
-  }, [isSessionStale, history, nowPlayingUrl, loadFromHistory]);
+  }, [isViewOnly, history, nowPlayingUrl, loadFromHistory]);
 
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6">
@@ -883,7 +885,7 @@ function AudioPlayerInner({
         <Button
           variant="outline"
           onClick={() => setShowLoadInputs(true)}
-          disabled={isSessionStale}
+          disabled={isViewOnly}
           className="w-full"
         >
           Load another
@@ -897,7 +899,7 @@ function AudioPlayerInner({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Add a short title"
-              disabled={isSessionStale}
+              disabled={isViewOnly}
             />
           </div>
           <div className="space-y-2">
@@ -908,15 +910,15 @@ function AudioPlayerInner({
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder="Enter audio URL"
-                onKeyDown={(e) => e.key === "Enter" && !isSessionStale && loadStream()}
-                disabled={isSessionStale}
+                onKeyDown={(e) => e.key === "Enter" && !isViewOnly && loadStream()}
+                disabled={isViewOnly}
               />
-              <Button onClick={() => loadStream()} disabled={isSessionStale}>Load</Button>
+              <Button onClick={() => loadStream()} disabled={isViewOnly}>Load</Button>
               {nowPlayingUrl && (
                 <Button
                   variant="ghost"
                   onClick={() => setShowLoadInputs(false)}
-                  disabled={isSessionStale}
+                  disabled={isViewOnly}
                 >
                   Cancel
                 </Button>
@@ -970,13 +972,13 @@ function AudioPlayerInner({
                   placeholder="Add a title"
                   className="h-7 text-sm"
                   autoFocus
-                  disabled={isSessionStale}
+                  disabled={isViewOnly}
                 />
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => saveNowPlayingTitleEdit(nowPlayingTitleDraft)}
-                  disabled={isSessionStale}
+                  disabled={isViewOnly}
                   className="h-7 px-2 text-xs"
                 >
                   Save
@@ -985,7 +987,7 @@ function AudioPlayerInner({
                   variant="ghost"
                   size="sm"
                   onClick={cancelNowPlayingTitleEdit}
-                  disabled={isSessionStale}
+                  disabled={isViewOnly}
                   className="h-7 px-2 text-xs text-muted-foreground"
                 >
                   Cancel
@@ -1000,7 +1002,7 @@ function AudioPlayerInner({
                   variant="ghost"
                   size="sm"
                   onClick={startNowPlayingTitleEdit}
-                  disabled={isSessionStale}
+                  disabled={isViewOnly}
                   className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
                   title="Edit title"
                 >
@@ -1026,7 +1028,7 @@ function AudioPlayerInner({
         </div>
       )}
 
-      {!isSessionStale && (
+      {!isViewOnly && (
         <audio
           ref={audioRef}
           onTimeUpdate={handleTimeUpdate}
@@ -1042,20 +1044,20 @@ function AudioPlayerInner({
         />
       )}
 
-      {!isSessionStale && (
+      {!isViewOnly && (
         <div className="space-y-4">
         <div className="flex items-center justify-center gap-4">
           <button
             onClick={() => seekRelative(-15)}
-            disabled={!isLoaded || isLiveStream || isSessionStale}
+            disabled={!isLoaded || isLiveStream || isViewOnly}
             className="flex items-center justify-center h-12 w-12 rounded-full border border-border bg-card text-muted-foreground shadow-sm transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:border-dashed disabled:bg-muted/40 disabled:text-muted-foreground/70"
-            title={isSessionStale ? "Take over session first" : isLiveStream ? "Seeking disabled for live" : "Back 15 seconds"}
+            title={isViewOnly ? "Take over session first" : isLiveStream ? "Seeking disabled for live" : "Back 15 seconds"}
           >
             <Skip15BackIcon className="w-10 h-10" />
           </button>
           <button
             onClick={togglePlayPause}
-            disabled={!isLoaded || isSessionStale}
+            disabled={!isLoaded || isViewOnly}
             className="flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed hover:scale-105 transition-transform"
           >
             {isPlaying ? (
@@ -1066,9 +1068,9 @@ function AudioPlayerInner({
           </button>
           <button
             onClick={() => seekRelative(30)}
-            disabled={!isLoaded || isLiveStream || isSessionStale}
+            disabled={!isLoaded || isLiveStream || isViewOnly}
             className="flex items-center justify-center h-12 w-12 rounded-full border border-border bg-card text-muted-foreground shadow-sm transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:border-dashed disabled:bg-muted/40 disabled:text-muted-foreground/70"
-            title={isSessionStale ? "Take over session first" : isLiveStream ? "Seeking disabled for live" : "Forward 30 seconds"}
+            title={isViewOnly ? "Take over session first" : isLiveStream ? "Seeking disabled for live" : "Forward 30 seconds"}
           >
             <Skip30ForwardIcon className="w-10 h-10" />
           </button>
@@ -1096,7 +1098,7 @@ function AudioPlayerInner({
                 size="sm"
                 variant="outline"
                 onClick={jumpToLiveEdge}
-                disabled={isSessionStale}
+                disabled={isViewOnly}
                 className="border-red-200 text-red-700 hover:bg-red-50"
               >
                 Go live
@@ -1110,7 +1112,7 @@ function AudioPlayerInner({
               max={duration || 100}
               step={1}
               onValueChange={handleSeek}
-              disabled={!isLoaded || !isFinite(duration) || isSessionStale}
+              disabled={!isLoaded || !isFinite(duration) || isViewOnly}
               className="w-full"
             />
             <div className="flex justify-between text-xs text-muted-foreground">
@@ -1127,7 +1129,7 @@ function AudioPlayerInner({
             max={1}
             step={0.01}
             onValueChange={handleVolumeChange}
-            disabled={isSessionStale}
+            disabled={isViewOnly}
             className="w-24"
           />
         </div>
@@ -1136,7 +1138,7 @@ function AudioPlayerInner({
         <div className="flex items-center gap-3">
           <button
             onClick={handleGainToggle}
-            disabled={!isLoaded || isSessionStale}
+            disabled={!isLoaded || isViewOnly}
             className={`text-xs px-2 py-1 rounded border transition-colors ${
               gainEnabled
                 ? "bg-primary text-primary-foreground border-primary"
@@ -1154,7 +1156,7 @@ function AudioPlayerInner({
                 max={3}
                 step={0.1}
                 onValueChange={(v) => setGain(v[0])}
-                disabled={isSessionStale}
+                disabled={isViewOnly}
                 className="w-24"
               />
               <span className="text-xs text-muted-foreground w-12">
@@ -1166,7 +1168,7 @@ function AudioPlayerInner({
         </div>
       )}
 
-      {isSessionStale && nowPlayingUrl && (
+      {isViewOnly && nowPlayingUrl && (
         <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
           Now playing position: {formatTime(currentTime)}
         </div>
@@ -1190,10 +1192,10 @@ function AudioPlayerInner({
                     <div
                       key={entry.url}
                       onClick={() =>
-                        !isSessionStale && editingUrl !== entry.url && handleHistorySelect(entry)
+                        !isViewOnly && editingUrl !== entry.url && handleHistorySelect(entry)
                       }
                       className={`flex items-start justify-between px-3 py-2 group ${
-                        isSessionStale
+                        isViewOnly
                           ? "cursor-not-allowed opacity-60"
                           : "hover:bg-accent/60 cursor-pointer"
                       }`}
@@ -1220,7 +1222,7 @@ function AudioPlayerInner({
                               placeholder="Add a title"
                               className="h-7 text-sm"
                               autoFocus
-                              disabled={isSessionStale}
+                              disabled={isViewOnly}
                             />
                             <div className="text-xs text-muted-foreground truncate" title={entry.url}>
                               {truncateUrl(entry.url)}
@@ -1261,7 +1263,7 @@ function AudioPlayerInner({
                             startTitleEdit(entry);
                           }}
                           onMouseDown={(e) => e.preventDefault()}
-                          disabled={isSessionStale}
+                          disabled={isViewOnly}
                           className={`h-6 w-6 p-0 ${editingUrl === entry.url ? "opacity-100 text-foreground" : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground"} disabled:cursor-not-allowed`}
                           title={editingUrl === entry.url ? "Save title" : "Edit title"}
                         >
@@ -1284,7 +1286,7 @@ function AudioPlayerInner({
                           variant="ghost"
                           size="sm"
                           onClick={(e) => handleDeleteEntry(e, entry.url)}
-                          disabled={isSessionStale}
+                          disabled={isViewOnly}
                           className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 text-muted-foreground hover:text-destructive disabled:cursor-not-allowed"
                           title="Delete"
                         >
@@ -1298,7 +1300,7 @@ function AudioPlayerInner({
                   variant="ghost"
                   size="sm"
                   onClick={handleClearHistory}
-                  disabled={isSessionStale}
+                  disabled={isViewOnly}
                   className="text-xs text-muted-foreground hover:text-destructive"
                 >
                   Clear All

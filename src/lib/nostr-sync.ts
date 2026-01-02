@@ -31,20 +31,10 @@ export function closePool(): void {
 }
 
 // Register cleanup handlers for browser environment
-// Multiple handlers ensure cleanup runs even if beforeunload is terminated early
+// pagehide is more reliable than beforeunload for mobile/bfcache scenarios
 if (typeof window !== "undefined") {
-  // beforeunload: standard unload handler, may be cut short
   window.addEventListener("beforeunload", closePool);
-
-  // pagehide: more reliable than beforeunload for mobile/bfcache scenarios
   window.addEventListener("pagehide", closePool);
-
-  // visibilitychange: cleanup when tab becomes hidden (covers mobile app switches)
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") {
-      closePool();
-    }
-  });
 }
 
 /** Validated payload structure from a Nostr event */
