@@ -12,26 +12,6 @@ This is an audio player built with React and TypeScript that supports cross-devi
 - **Sync Protocol**: Nostr (nostr-tools)
 - **Encryption**: NIP-44 (for encrypted payloads)
 
-## Directory Structure
-
-```
-src/
-├── main.tsx                 # Application entry point
-├── App.tsx                  # Root component
-├── components/
-│   ├── AudioPlayer.tsx      # Main audio player component
-│   ├── NostrSyncPanel.tsx   # Nostr sync UI and orchestration
-│   └── ui/                  # shadcn/ui components (button, slider, input)
-├── hooks/
-│   ├── useNostrSession.ts   # Session state and takeover grace management
-│   └── useNostrSync.ts      # Nostr sync operations (master-slave architecture)
-└── lib/
-    ├── history.ts           # History types and payload validation
-    ├── nostr-sync.ts        # Nostr relay communication
-    ├── nostr-crypto.ts      # Key derivation and encryption
-    └── utils.ts             # Utility functions (cn)
-```
-
 ## Core Components
 
 ### AudioPlayer (`components/AudioPlayer.tsx`)
@@ -63,7 +43,8 @@ Manages session state and takeover grace periods:
 
 - **Session Status**: Tracks `idle`, `active`, `stale`, `invalid`, or `unknown` status
 - **Secret Validation**: Validates URL hash checksum on load via `isValidSecret()` for fail-fast typo detection
-- **Idle on Load**: When page loads with a secret hash, status starts as `idle` (read-only viewing)
+- **Initial State**: On page load, state is `idle` (valid secret present), `invalid` (bad checksum), or `unknown` (no secret)
+- **Bootstrap Paths**: `unknown` → `idle` → `active` (generate secret, then start session) or `idle` → `active` (start session with existing secret)
 - **Takeover Grace**: Provides `ignoreRemoteUntil` timestamp to suppress remote events briefly after takeover
 - **Session ID**: Generates unique session IDs via `crypto.randomUUID()`
 
@@ -136,12 +117,30 @@ Page Load Flow:
 
 State Transitions:
 ──────────────────
-  invalid ──[Generate New Secret]──▶ idle (new valid secret)
+  invalid ──[Generate New Secret]──▶ idle
   idle ──[Start Session]──▶ active
   active ──[Remote takeover]──▶ stale
   stale ──[Take Over Session]──▶ active
-  idle ──[Remote event]──▶ idle (stays idle, just updates history)
+  idle ──[Remote event]──▶ idle (history updated, state unchanged)
+  stale ──[Remote event]──▶ stale (history updated, state unchanged)
 ```
+
+**Transition Triggers:**
+
+| Transition | Trigger | Mechanism |
+|------------|---------|-----------|
+| `invalid` → `idle` | User clicks "Generate New Secret Link" | `generateSecret()` creates new valid secret, updates URL hash |
+| `idle` → `active` | User clicks "Start Session" | `startSession()` publishes with new sessionId, starts 15s grace period |
+| `active` → `stale` | Remote event with different sessionId | `subscribeToHistoryDetailed()` detects foreign sessionId in payload |
+| `stale` → `active` | User clicks "Take Over Session" | `performLoad(secret, isTakeOver=true)` re-claims with new sessionId |
+| `idle` → `idle` | Remote event arrives | History merged via `onHistoryLoaded`, no session claim |
+| `stale` → `stale` | Remote event arrives | History merged via `onRemoteSync`, remains read-only |
+
+**Timeout/Heartbeat Behavior:**
+- **Not implemented:** No heartbeat or timeout-based stale detection exists.
+- Active sessions publish position updates every 5s during playback, but silent disconnections (e.g., browser closed) are not detected.
+- A device remains "active" indefinitely until another device explicitly takes over.
+- **Roadmap:** Heartbeat-based inactive detection (mark sessions stale after N minutes without updates).
 
 ### Session Takeover Flow
 
@@ -212,7 +211,7 @@ Nostr protocol integration for cloud sync.
 - ✅ **Current:** Real-time subscription detects remote session activity via `HistoryPayload.sessionId`. When a remote event with a different sessionId arrives, the local session transitions to `stale` status only if currently `active`. Idle sessions stay idle (they haven't claimed the session yet).
 - ✅ **Idle state:** Page load with secret starts in `idle` state. User must click "Start Session" to claim. This prevents race conditions and confusion about session ownership.
 - ✅ **Takeover grace period:** After taking over a session, remote events are ignored for a configurable grace period (`ignoreRemoteUntil`) to prevent immediate re-staling from delayed events.
-- ✅ **Live position sync:** Active sessions publish position updates every 5s during playback, allowing idle/stale devices to track playback position.
+- ✅ **Live position sync:** Active sessions publish position updates every 5s during playback, allowing idle/stale devices to track playback position. Idle devices apply incoming position updates immediately to their UI and history (displayed position stays in sync) but do not start or change playback state. When transitioning from idle to active, the client seeks to the latest received position and begins playback from there (only the most recent position is retained, no queueing). Takeover grace period rules still apply to prevent immediate re-staling from delayed events.
 - ⚠️ **Roadmap:** Heartbeat-based inactive detection (mark sessions inactive after N minutes without updates).
 
 **Key functions (nostr-sync.ts):**
