@@ -111,13 +111,13 @@ export function NostrSyncPanel({
 
       // If we are in success state, keep the message, otherwise show temporary copy feedback
       if (status !== "success") {
-          setMessage("Link copied to clipboard!");
+          setMessage("Sync URL copied!");
           // Reset message after delay if it was just the copy confirmation
           if (copyMessageTimerRef.current) {
             clearTimeout(copyMessageTimerRef.current);
           }
           copyMessageTimerRef.current = window.setTimeout(() => {
-              if (messageRef.current === "Link copied to clipboard!") {
+              if (messageRef.current === "Sync URL copied!") {
                 setMessage(null);
               }
               copyMessageTimerRef.current = null;
@@ -125,7 +125,7 @@ export function NostrSyncPanel({
       }
     } catch (err) {
       console.error("Failed to copy link:", err);
-      setMessage("Failed to copy link");
+      setMessage("Failed to copy sync URL");
     }
   };
 
@@ -182,10 +182,10 @@ export function NostrSyncPanel({
                 variant="outline"
                 onClick={handleCopyLink}
                 className="w-full h-8 text-xs"
-                title="Copy link to share or save"
+                title="Copy URL to sync across devices"
               >
                  {copiedLink ? <CheckIcon className="w-3.5 h-3.5 mr-1" /> : <LinkIcon className="w-3.5 h-3.5 mr-1" />}
-                 {copiedLink ? "Copied" : "Copy Link"}
+                 {copiedLink ? "Copied" : "Copy Sync URL"}
               </Button>
           )}
           
