@@ -139,6 +139,23 @@ describe("deriveNostrKeys", () => {
   it("throws on empty secret", async () => {
     await expect(deriveNostrKeys("")).rejects.toThrow("Secret cannot be empty");
   });
+
+  it("throws on invalid secret format", async () => {
+    await expect(deriveNostrKeys("tooshort")).rejects.toThrow(
+      "Invalid secret format or checksum"
+    );
+  });
+
+  it("throws on invalid checksum", async () => {
+    const secret = generateSecret();
+    // Flip one character to break checksum
+    const chars = secret.split("");
+    chars[0] = chars[0] === "A" ? "B" : "A";
+    const badSecret = chars.join("");
+    await expect(deriveNostrKeys(badSecret)).rejects.toThrow(
+      "Invalid secret format or checksum"
+    );
+  });
 });
 
 describe("encryptHistory / decryptHistory", () => {

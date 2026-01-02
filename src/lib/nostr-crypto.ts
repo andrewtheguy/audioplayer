@@ -94,6 +94,9 @@ export async function deriveNostrKeys(
   if (!secret) {
     throw new Error("Secret cannot be empty");
   }
+  if (!isValidSecret(secret)) {
+    throw new Error("Invalid secret format or checksum");
+  }
   throwIfAborted(signal);
 
   const encoder = new TextEncoder();
