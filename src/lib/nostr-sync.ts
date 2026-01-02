@@ -6,7 +6,7 @@ import { encryptHistory, decryptHistory } from "./nostr-crypto";
 export const RELAYS = [
   "wss://relay.damus.io",
   "wss://relay.primal.net",
-  //"wss://relay.nostr.band",
+  "wss://relay.nostr.band",
   "wss://nos.lol",
 ];
 
