@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isValidSecret } from "@/lib/nostr-crypto";
 
-export type SessionStatus = "unclaimed" | "active" | "stale" | "unknown";
+export type SessionStatus = "idle" | "active" | "stale" | "invalid" | "unknown";
 
 interface UseNostrSessionOptions {
   sessionId?: string;
@@ -28,14 +29,37 @@ function getSecretFromHash(): string {
   return hash.startsWith("#") ? hash.slice(1) : hash;
 }
 
+function getInitialStatus(secret: string): SessionStatus {
+  if (!secret) return "unknown";
+  if (!isValidSecret(secret)) return "invalid";
+  return "idle";
+}
+
+function getInitialNotice(status: SessionStatus): string | null {
+  if (status === "invalid") {
+    return "Invalid secret link. Check for typos in the URL.";
+  }
+  return null;
+}
+
+function computeInitialState() {
+  const secret = getSecretFromHash();
+  const status = getInitialStatus(secret);
+  const notice = getInitialNotice(status);
+  return { secret, status, notice };
+}
+
 export function useNostrSession({
   sessionId,
   onSessionStatusChange,
   takeoverGraceMs = DEFAULT_TAKEOVER_GRACE_MS,
 }: UseNostrSessionOptions): UseNostrSessionResult {
-  const [secret, setSecret] = useState(getSecretFromHash());
-  const [sessionStatus, setSessionStatus] = useState<SessionStatus>("unknown");
-  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+  // Compute initial state once using lazy initializer pattern.
+  // Each useState shares the same computed object via closure.
+  const [initial] = useState(computeInitialState);
+  const [secret, setSecret] = useState(initial.secret);
+  const [sessionStatus, setSessionStatus] = useState<SessionStatus>(initial.status);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(initial.notice);
   const [localSessionId] = useState(() => sessionId ?? crypto.randomUUID());
   const [ignoreRemoteUntil, setIgnoreRemoteUntil] = useState<number>(0);
 
@@ -59,7 +83,7 @@ export function useNostrSession({
         clearTimeout(staleNoticeTimerRef.current);
       }
       staleNoticeTimerRef.current = window.setTimeout(() => {
-        setSessionNotice("Session taken over by another device.");
+        setSessionNotice("Another device is now active.");
         staleNoticeTimerRef.current = null;
       }, 0);
     }
@@ -78,8 +102,11 @@ export function useNostrSession({
     const handleHashChange = () => {
       const newSecret = getSecretFromHash();
       setSecret(newSecret);
-      if (!newSecret) {
-        setSessionStatus("unknown");
+      const newStatus = getInitialStatus(newSecret);
+      setSessionStatus(newStatus);
+      if (newStatus === "invalid") {
+        setSessionNotice("Invalid secret link. Check for typos in the URL.");
+      } else {
         setSessionNotice(null);
       }
     };

@@ -12,7 +12,7 @@ export const RELAYS = [
 ];
 
 const KIND_HISTORY = 30078; // NIP-78: Application-specific replaceable data
-const D_TAG = "audioplayer-v2";
+const D_TAG = "audioplayer-v3";
 
 const pool = new SimplePool();
 
@@ -26,13 +26,19 @@ function throwIfAborted(signal?: AbortSignal): void {
  * Close all relay connections to avoid resource leaks.
  * Call this during application shutdown or cleanup.
  */
+let poolClosed = false;
 export function closePool(): void {
+  if (poolClosed) return;
+  poolClosed = true;
   pool.close(RELAYS);
 }
 
-// Register cleanup on page unload (browser environment)
+// Register cleanup handlers for browser environment
+// Both handlers are registered since browser support varies;
+// the poolClosed flag prevents duplicate cleanup calls.
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", closePool);
+  window.addEventListener("pagehide", closePool);
 }
 
 /** Validated payload structure from a Nostr event */
@@ -188,49 +194,6 @@ export async function loadHistoryFromNostr(
 }
 
 /**
- * Subscribe to history updates
- * Returns a cleanup function to unsubscribe
- */
-export function subscribeToHistory(
-  userPublicKey: string,
-  onEvent: (sessionId: string | null) => void
-): () => void {
-  try {
-    const sub = pool.subscribeMany(
-      RELAYS,
-      {
-        kinds: [KIND_HISTORY],
-        authors: [userPublicKey],
-        "#d": [D_TAG],
-      },
-      {
-        onevent: (event) => {
-          try {
-            const sessionTag = event.tags.find((t) => t[0] === "session");
-            onEvent(sessionTag ? sessionTag[1] : null);
-          } catch (err) {
-            console.error("Nostr history event handler failed:", err);
-          }
-        },
-      }
-    );
-
-    if (canSetOnError(sub)) {
-      sub.onerror = (err) => {
-        console.error("Nostr history subscription error:", err);
-      };
-    }
-
-    return () => {
-      sub.close();
-    };
-  } catch (err) {
-    console.error("Failed to subscribe to Nostr history:", err);
-    return () => {};
-  }
-}
-
-/**
  * Subscribe to history updates with full payload decryption
  * Returns HistoryPayload with embedded timestamp and sessionId
  */
@@ -294,9 +257,41 @@ export interface MergeOptions {
 }
 
 /**
- * Merge cloud history into local history
+ * Merge cloud history into local history.
  * Keep local order, add URLs from cloud that don't exist locally.
  * If preferRemote is true, remote entries replace local entries for the same URL.
+ *
+ * @example Default (no options) - local order preserved, cloud-only URLs appended
+ * ```
+ * local:  [{url:"A", position:10}, {url:"B", position:20}]
+ * cloud:  [{url:"B", position:99, title:"B Title"}, {url:"C", position:30}]
+ * merged: [{url:"A", position:10}, {url:"B", position:20, title:"B Title"}, {url:"C", position:30}]
+ * addedFromCloud: 1, duplicatesSkipped: 1
+ * ```
+ *
+ * @example preferRemote=true - remote data replaces local for same URL
+ * ```
+ * local:  [{url:"A", position:10}, {url:"B", position:20}]
+ * cloud:  [{url:"B", position:99, title:"B Title"}, {url:"C", position:30}]
+ * merged: [{url:"A", position:10}, {url:"B", position:99, title:"B Title"}, {url:"C", position:30}]
+ * addedFromCloud: 1, duplicatesSkipped: 1
+ * ```
+ *
+ * @example preferRemoteOrder=true - remote ordering used, local-only appended
+ * ```
+ * local:  [{url:"A", position:10}, {url:"B", position:20}]
+ * cloud:  [{url:"C", position:30}, {url:"B", position:99}]
+ * merged: [{url:"C", position:30}, {url:"B", position:20}, {url:"A", position:10}]
+ * addedFromCloud: 1, duplicatesSkipped: 1
+ * ```
+ *
+ * @example preferRemote=true, preferRemoteOrder=true - full remote preference
+ * ```
+ * local:  [{url:"A", position:10}, {url:"B", position:20}]
+ * cloud:  [{url:"C", position:30}, {url:"B", position:99}]
+ * merged: [{url:"C", position:30}, {url:"B", position:99}, {url:"A", position:10}]
+ * addedFromCloud: 1, duplicatesSkipped: 1
+ * ```
  */
 export function mergeHistory(
   local: HistoryEntry[],

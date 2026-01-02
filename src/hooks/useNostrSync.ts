@@ -51,6 +51,8 @@ interface UseNostrSyncResult {
     isTakeOver?: boolean,
     options?: { followRemote?: boolean; silent?: boolean }
   ) => Promise<void>;
+  performInitialLoad: (currentSecret: string) => Promise<void>;
+  startSession: (currentSecret: string) => Promise<void>;
 }
 
 const DEFAULT_DEBOUNCE_SAVE_MS = 5000;
@@ -293,7 +295,13 @@ export function useNostrSync({
       });
       skipNextDirtyRef.current = true;
       onHistoryLoadedRef.current(result.merged);
-      if (isTakeOver) {
+      // Only trigger onTakeOver when transitioning from a non-active state (actual device takeover)
+      // This includes transitions from "stale" (read-only follower) and "idle" (no local session yet),
+      // but avoids firing during already-active sessions to prevent unnecessary remounts.
+      if (
+        isTakeOver &&
+        (sessionStatusRef.current === "stale" || sessionStatusRef.current === "idle")
+      ) {
         onTakeOverRef.current?.(cloudHistory);
       }
       if (followRemote) {
@@ -324,6 +332,7 @@ export function useNostrSync({
       }
 
       if (isTakeOver || !remoteSid || remoteSid === localSessionId) {
+        console.log("[nostr-sync] updateSessionStateAndMaybeSave: setting status to active");
         setSessionStatus("active");
         clearSessionNotice();
         if (isTakeOver || !remoteSid) {
@@ -346,6 +355,7 @@ export function useNostrSync({
       const signal = abortRef.current?.signal;
       if (signal?.aborted) return;
 
+      console.log("[nostr-sync] performLoad: starting, isTakeOver:", isTakeOver, "status:", sessionStatusRef.current);
       const followRemote = options?.followRemote === true;
       const silent = options?.silent === true;
       if (!silent) {
@@ -417,7 +427,11 @@ export function useNostrSync({
           void performSave(currentSecret, historyRef.current, { allowStale: true });
         }
       } catch (err) {
-        if (!isActive()) return;
+        if (!isActive()) {
+          console.log("[nostr-sync] performLoad: aborted (component unmounted)");
+          return;
+        }
+        console.error("[nostr-sync] performLoad: error", err);
         if (!silent) {
           setStatus("error");
           if (err instanceof TimeoutError) {
@@ -447,9 +461,93 @@ export function useNostrSync({
     performLoadRef.current = performLoad;
   }, [performLoad]);
 
+  // Initial load: fetch history read-only without claiming session (for idle state)
+  const performInitialLoad = useCallback(
+    async (currentSecret: string) => {
+      if (!currentSecret || !isActive()) return;
+      const signal = abortRef.current?.signal;
+      if (signal?.aborted) return;
+
+      console.log("[nostr-sync] performInitialLoad: starting");
+      setStatus("loading");
+      setMessage("Loading history...");
+
+      try {
+        const keys = await withTimeout(
+          deriveNostrKeys(currentSecret, signal),
+          operationTimeoutMs
+        );
+        if (!isActive()) return;
+        const cloudData = await withTimeout(
+          loadHistoryFromNostr(keys.privateKey, keys.publicKey, signal),
+          operationTimeoutMs
+        );
+        if (!isActive()) return;
+
+        const fingerprint = await getSecretFingerprint(currentSecret);
+        if (!isActive()) return;
+        setLastOperation({
+          type: "loaded",
+          fingerprint,
+          timestamp: formatTimestamp(new Date()),
+        });
+
+        if (cloudData) {
+          const { history: cloudHistory, timestamp } = cloudData;
+          if (timestamp > latestTimestampRef.current) {
+            latestTimestampRef.current = timestamp;
+          }
+          // Merge and display history (read-only, don't claim session)
+          const result = mergeHistory(historyRef.current, cloudHistory, {
+            preferRemote: true,
+            preferRemoteOrder: true,
+          });
+          skipNextDirtyRef.current = true;
+          onHistoryLoadedRef.current(result.merged);
+          setStatus("success");
+          setMessage(`Loaded ${cloudHistory.length} entries`);
+        } else {
+          setStatus("success");
+          setMessage("No history found. Click Start Session to begin.");
+        }
+        dirtyRef.current = false;
+      } catch (err) {
+        if (!isActive()) return;
+        setStatus("error");
+        if (err instanceof TimeoutError) {
+          setMessage("Load timed out. Check your connection.");
+        } else {
+          setMessage(err instanceof Error ? err.message : "Failed to load");
+        }
+      }
+    },
+    [isActive, operationTimeoutMs]
+  );
+
+  // Start session: claim the session and begin syncing
+  const startSession = useCallback(
+    async (currentSecret: string) => {
+      if (!currentSecret || !isActive()) return;
+      console.log("[nostr-sync] startSession: claiming session, current status:", sessionStatusRef.current);
+      // Use performLoad with isTakeOver=true to claim the session
+      await performLoad(currentSecret, true);
+      console.log("[nostr-sync] startSession: complete, new status:", sessionStatusRef.current);
+    },
+    [isActive, performLoad]
+  );
+
+  const performInitialLoadRef = useRef<((currentSecret: string) => Promise<void>) | null>(null);
+
+  useEffect(() => {
+    performInitialLoadRef.current = performInitialLoad;
+  }, [performInitialLoad]);
+
+  // On secret change, do initial load (read-only) instead of claiming session
   useEffect(() => {
     if (!secret) return;
-    void performLoadRef.current?.(secret);
+    if (sessionStatusRef.current === "idle") {
+      void performInitialLoadRef.current?.(secret);
+    }
   }, [secret]);
 
   // NostrPad-style event handler for subscription
@@ -467,12 +565,13 @@ export function useNostrSync({
       // Check grace period - ignore remote events during takeover grace
       if (Date.now() < ignoreRemoteUntilRef.current) return;
 
-      // Check for session takeover
+      // Check for session takeover - only transition to stale if currently active
+      // (idle devices stay idle, they haven't claimed the session yet)
       if (payload.sessionId && payload.sessionId !== localSessionId) {
-        if (sessionStatusRef.current !== "stale") {
+        if (sessionStatusRef.current === "active") {
           setSessionStatus("stale");
           setSessionNotice(
-            "Another session is active — viewing in read-only mode. Take over to edit."
+            "Another device is now active."
           );
         }
       }
@@ -481,7 +580,8 @@ export function useNostrSync({
       if (!isLocalChangeRef.current) {
         skipNextDirtyRef.current = true;
         onHistoryLoadedRef.current(payload.history);
-        if (sessionStatusRef.current === "stale") {
+        // Notify remote sync for both idle and stale devices (read-only viewers)
+        if (sessionStatusRef.current === "stale" || sessionStatusRef.current === "idle") {
           onRemoteSyncRef.current?.(payload.history);
         }
       }
@@ -570,6 +670,8 @@ export function useNostrSync({
     setMessage,
     performSave,
     performLoad,
+    performInitialLoad,
+    startSession,
   };
 }
 

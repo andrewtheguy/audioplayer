@@ -12,26 +12,6 @@ This is an audio player built with React and TypeScript that supports cross-devi
 - **Sync Protocol**: Nostr (nostr-tools)
 - **Encryption**: NIP-44 (for encrypted payloads)
 
-## Directory Structure
-
-```
-src/
-├── main.tsx                 # Application entry point
-├── App.tsx                  # Root component
-├── components/
-│   ├── AudioPlayer.tsx      # Main audio player component
-│   ├── NostrSyncPanel.tsx   # Nostr sync UI and orchestration
-│   └── ui/                  # shadcn/ui components (button, slider, input)
-├── hooks/
-│   ├── useNostrSession.ts   # Session state and takeover grace management
-│   └── useNostrSync.ts      # Nostr sync operations (master-slave architecture)
-└── lib/
-    ├── history.ts           # History types and payload validation
-    ├── nostr-sync.ts        # Nostr relay communication
-    ├── nostr-crypto.ts      # Key derivation and encryption
-    └── utils.ts             # Utility functions (cn)
-```
-
 ## Core Components
 
 ### AudioPlayer (`components/AudioPlayer.tsx`)
@@ -61,7 +41,10 @@ Orchestrates cross-device synchronization by connecting session management with 
 
 Manages session state and takeover grace periods:
 
-- **Session Status**: Tracks `active`, `stale`, or `unknown` status
+- **Session Status**: Tracks `idle`, `active`, `stale`, `invalid`, or `unknown` status
+- **Secret Validation**: Validates URL hash checksum on load via `isValidSecret()` for fail-fast typo detection
+- **Initial State**: On page load, state is one of: `idle` (valid secret present), `invalid` (bad checksum), or `unknown` (no secret)
+- **Bootstrap Paths**: `unknown` → `idle` → `active` (generate secret, then start session) or `idle` → `active` (start session with existing secret)
 - **Takeover Grace**: Provides `ignoreRemoteUntil` timestamp to suppress remote events briefly after takeover
 - **Session ID**: Generates unique session IDs via `crypto.randomUUID()`
 
@@ -69,12 +52,15 @@ Manages session state and takeover grace periods:
 
 Handles all Nostr synchronization using a master-slave architecture (inspired by NostrPad):
 
+- **Idle State Support**: `performInitialLoad()` fetches history read-only without claiming session
+- **Session Start**: `startSession()` explicitly claims the session when user clicks "Start Session"
 - **Timestamp-based Ordering**: Uses millisecond timestamps embedded in payloads for reliable event ordering
 - **Real-time Subscription**: Subscribes to Nostr events for instant cross-device updates
-- **Auto-save**: Debounced saves when history changes (5s delay)
+- **Auto-save**: Debounced saves when history changes (5s delay, only when active)
 - **Live Position Updates**: Publishes position every 5s during active playback for slave device sync
 - **Local Change Protection**: Uses `isLocalChangeRef` to prevent remote overwrites during local operations
 - **Duplicate Prevention**: Uses `pendingPublishRef` to avoid concurrent publishes
+- **Stale Transition**: Only transitions to `stale` from `active` state (idle stays idle)
 
 ## Data Flow
 
@@ -101,9 +87,71 @@ User Action → AudioPlayer → saveCurrentPosition() → localStorage
 
 **Sync ordering**: Events are ordered by embedded millisecond timestamps in the encrypted payload (`HistoryPayload.timestamp`), not by Nostr event `created_at` (which has only second precision). This ensures reliable ordering even with rapid updates.
 
+### Session State Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         SESSION STATES                               │
+├─────────────────────────────────────────────────────────────────────┤
+│  unknown    │  No secret in URL, local-only mode                    │
+│  invalid    │  Secret has bad checksum, likely typo in URL          │
+│  idle       │  Secret present, viewing read-only, not claimed       │
+│  active     │  Session claimed, can edit and sync                   │
+│  stale      │  Another device took over, read-only until reclaim    │
+└─────────────────────────────────────────────────────────────────────┘
+
+Page Load Flow:
+───────────────
+  No secret in URL → "unknown" (local only, no sync)
+
+  Secret in URL with bad checksum → "invalid" (error shown, no sync)
+
+  Secret in URL with valid checksum → "idle" (read-only)
+       ↓
+  performInitialLoad() fetches history
+       ↓
+  User clicks "Start Session"
+       ↓
+  startSession() claims session → "active"
+
+
+State Transitions:
+──────────────────
+  invalid ──[Generate New Secret]──▶ idle
+  idle ──[Start Session]──▶ active
+  active ──[Remote takeover]──▶ stale
+  stale ──[Take Over Session]──▶ active
+  idle ──[Remote event]──▶ idle (history updated, state unchanged)
+  stale ──[Remote event]──▶ stale (history updated, state unchanged)
+```
+
+**Transition Triggers:**
+
+| Transition | Trigger | Mechanism |
+|------------|---------|-----------|
+| `invalid` → `idle` | User clicks "Generate New Secret Link" | `generateSecret()` creates new valid secret, updates URL hash |
+| `idle` → `active` | User clicks "Start Session" | `startSession()` publishes with new sessionId, starts 15s grace period |
+| `active` → `stale` | Remote event with different sessionId | `subscribeToHistoryDetailed()` detects foreign sessionId in payload |
+| `stale` → `active` | User clicks "Take Over Session" | `performLoad(secret, isTakeOver=true)` re-claims with new sessionId |
+| `idle` → `idle` | Remote event arrives | History merged via `onHistoryLoaded`, no session claim |
+| `stale` → `stale` | Remote event arrives | History merged via `onRemoteSync`, remains read-only |
+
+**Timeout/Heartbeat Behavior:**
+- **Not implemented:** No heartbeat or timeout-based stale detection exists.
+- Active sessions publish position updates every 5s during playback, but silent disconnections (e.g., browser closed) are not detected.
+- A device remains "active" indefinitely until another device explicitly takes over.
+- **Roadmap:** Heartbeat-based inactive detection (mark sessions stale after N minutes without updates).
+
 ### Session Takeover Flow
 
 ```
+From Idle (first time claiming):
+1. User clicks "Start Session"
+2. startSession() calls performLoad(secret, isTakeOver=true)
+3. Grace period starts (15s)
+4. Saves with new sessionId → "active"
+
+From Stale (reclaiming):
 1. Device B clicks "Take Over Session"
 2. NostrSyncPanel.performLoad(secret, isTakeOver=true)
 3. Fetches and decrypts cloud history
@@ -149,7 +197,7 @@ Nostr protocol integration for cloud sync.
 
 **Event structure (NIP-78):**
 - Kind: 30078 (application-specific replaceable)
-- d-tag: "audioplayer-v2"
+- d-tag: "audioplayer-v3"
 
 **Session tag strategy**
 - ✅ **Current:** UUIDv4 generated via `crypto.randomUUID()` per client session.
@@ -160,27 +208,39 @@ Nostr protocol integration for cloud sync.
 - Optional per-URL or per-user namespace prefix to avoid cross-URL collisions.
 
 **Stale-session detection**
-- ✅ **Current:** Real-time subscription detects remote session activity via `HistoryPayload.sessionId`. When a remote event with a different sessionId arrives, the local session transitions to `stale` status.
+- ✅ **Current:** Real-time subscription detects remote session activity via `HistoryPayload.sessionId`. When a remote event with a different sessionId arrives, the local session transitions to `stale` status only if currently `active`. Idle sessions stay idle (they haven't claimed the session yet).
+- ✅ **Idle state:** Page load with secret starts in `idle` state. User must click "Start Session" to claim. This prevents race conditions and confusion about session ownership.
 - ✅ **Takeover grace period:** After taking over a session, remote events are ignored for a configurable grace period (`ignoreRemoteUntil`) to prevent immediate re-staling from delayed events.
-- ✅ **Live position sync:** Active sessions publish position updates every 5s during playback, allowing slave devices to track playback position.
+- ✅ **Live position sync:** Active sessions publish position updates every 5s during playback, allowing idle/stale devices to track playback position. Idle devices apply incoming position updates immediately to their UI and history (displayed position stays in sync) but do not start or change playback state. When transitioning from idle to active, the client seeks to the latest received position and begins playback from there (only the most recent position is retained, no queueing). Takeover grace period rules still apply to prevent immediate re-staling from delayed events.
 - ⚠️ **Roadmap:** Heartbeat-based inactive detection (mark sessions inactive after N minutes without updates).
 
-**Key functions:**
+**Key functions (nostr-sync.ts):**
 - `saveHistoryToNostr()`: Encrypts and publishes history with embedded timestamp and sessionId
 - `loadHistoryFromNostr()`: Fetches and decrypts latest history, returns `HistoryPayload`
-- `subscribeToHistory()`: Real-time subscription for session changes (basic callback)
 - `subscribeToHistoryDetailed()`: Real-time subscription returning full `HistoryPayload` for timestamp ordering
 - `mergeHistory()`: Combines local and cloud history with conflict resolution
 - `parseAndValidateEventContent()`: Validates Nostr event content structure
 - `canSetOnError()`: Type guard for error handler assignment
 
+**Key functions (useNostrSync.ts):**
+- `performInitialLoad()`: Fetches history read-only without claiming session (for idle state)
+- `startSession()`: Claims session by calling performLoad with isTakeOver=true
+- `performLoad()`: Fetches and optionally claims session
+- `performSave()`: Encrypts and publishes current history
+
 ### nostr-crypto.ts
 
 Cryptographic utilities for secure sync.
 
+**Secret format:**
+- 11 bytes random + 1 byte CRC-8 checksum = 12 bytes total
+- URL-safe Base64 encoded → 16 characters (e.g., `#OR8QqY-v_4XA64vx`)
+- Checksum enables fail-fast validation before attempting key derivation/decryption
+- `generateSecret()`: Creates new secret with embedded checksum
+- `isValidSecret(secret)`: Validates length, format, and checksum; returns `false` for typos
+
 **Key derivation:**
 - User secret (URL hash) → HKDF-SHA256 with salt → secp256k1 keypair
-- Secret is 96-bit random, URL-safe Base64 encoded
 - `deriveNostrKeys(secret, signal?)`: Async key derivation with optional abort signal
 
 **Encryption (NIP-44):**
@@ -192,19 +252,26 @@ Cryptographic utilities for secure sync.
 ## Security Model
 
 1. **Secret-based Access**: The URL hash contains the secret key
-2. **End-to-End Encryption**: History is encrypted before leaving the device
-3. **No Server Trust**: Relays only see encrypted blobs
-4. **Session Ownership**: Session ID prevents simultaneous edits
+2. **Checksum Validation**: CRC-8 checksum detects typos immediately (fail-fast)
+3. **End-to-End Encryption**: History is encrypted before leaving the device
+4. **No Server Trust**: Relays only see encrypted blobs
+5. **Session Ownership**: Session ID prevents simultaneous edits
 
 ```
 URL: https://app.example.com/#<secret>
                                ↓
-                    deriveNostrKeys(secret)
+                    isValidSecret(secret)
                                ↓
               ┌────────────────┴────────────────┐
               ▼                                 ▼
-        privateKey                         publicKey
-    (decrypt/sign)                      (encrypt/verify)
+          invalid                            valid
+    (show error, block sync)                   ↓
+                                    deriveNostrKeys(secret)
+                                               ↓
+                              ┌────────────────┴────────────────┐
+                              ▼                                 ▼
+                        privateKey                         publicKey
+                    (decrypt/sign)                      (encrypt/verify)
 ```
 
 ## Resilience & Error Handling
