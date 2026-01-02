@@ -4,7 +4,7 @@ import type { HistoryEntry, HistoryPayload } from "./history";
 import { encryptHistory, decryptHistory } from "./nostr-crypto";
 
 export const RELAYS = [
-  "wss://relay.damus.io",
+  //"wss://relay.damus.io", [nostr] publish failed on wss://relay.damus.io: rate-limited: you are noting too much
   "wss://relay.primal.net",
   "wss://relay.snort.social",
   "wss://relay.nostr.net",
