@@ -141,11 +141,8 @@ export function NostrSyncPanel({
         {secret && (
              <div className="flex items-center gap-2">
                  {sessionStatus === 'active' && <span className="text-[10px] text-green-500 font-bold px-1.5 py-0.5 bg-green-500/10 rounded-full">ACTIVE</span>}
-                 {sessionStatus === 'idle' && <span className="text-[10px] text-blue-500 font-bold px-1.5 py-0.5 bg-blue-500/10 rounded-full">IDLE</span>}
-                 {sessionStatus === 'stale' && <span className="text-[10px] text-amber-500 font-bold px-1.5 py-0.5 bg-amber-500/10 rounded-full">READ-ONLY</span>}
-                 {sessionStatus === 'invalid' && <span className="text-[10px] text-red-500 font-bold px-1.5 py-0.5 bg-red-500/10 rounded-full">INVALID</span>}
                  <span className="font-mono text-[10px] opacity-70" title="Your secret key is in the URL">
-                     {sessionStatus === 'invalid' ? 'Error' : 'Connected'}
+                     {sessionStatus === 'invalid' ? 'Error' : sessionStatus === 'idle' ? 'Ready' : 'Connected'}
                  </span>
              </div>
         )}

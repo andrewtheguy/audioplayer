@@ -817,11 +817,14 @@ function AudioPlayerInner({
 
   const showLiveCta = isLiveStream && !isPlaying;
   const handleSessionStatusChange = useCallback((status: "idle" | "active" | "stale" | "invalid" | "unknown") => {
-    // idle, stale, and invalid are read-only states
+    // idle, stale, and invalid are read-only states that disable controls
+    // - idle: viewing mode, user can still listen but not control playback
+    // - stale: another device took over, must cleanup resources
+    // - invalid: bad checksum, never loaded resources, nothing to cleanup
     setIsSessionStale(status === "stale" || status === "idle" || status === "invalid");
     setActualSessionStatus(status);
     if (status === "stale") {
-      // Only stale (takeover) needs to pause and cleanup - idle is just viewing
+      // Only stale needs cleanup - idle preserves playback, invalid never had resources
       const audio = audioRef.current;
       if (audio && !audio.paused) {
         audio.pause();
@@ -926,6 +929,14 @@ function AudioPlayerInner({
       {actualSessionStatus === "stale" ? (
         <div className="text-sm text-amber-700 bg-amber-500/10 border border-amber-500/20 p-3 rounded-md">
           Another device is now active. Controls are disabled.
+        </div>
+      ) : actualSessionStatus === "idle" ? (
+        <div className="text-sm text-blue-700 bg-blue-500/10 border border-blue-500/20 p-3 rounded-md">
+          Viewing mode. Start a session to enable controls.
+        </div>
+      ) : actualSessionStatus === "invalid" ? (
+        <div className="text-sm text-red-700 bg-red-500/10 border border-red-500/20 p-3 rounded-md">
+          Invalid secret link. Check for typos or generate a new one.
         </div>
       ) : (
         error && (
