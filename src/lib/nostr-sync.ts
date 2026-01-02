@@ -1,7 +1,7 @@
 import { finalizeEvent } from "nostr-tools/pure";
 import { SimplePool } from "nostr-tools/pool";
 import type { HistoryEntry } from "./history";
-import { encryptHistory, decryptHistory } from "./pin-crypto";
+import { encryptHistory, decryptHistory } from "./nostr-crypto";
 
 export const RELAYS = [
   "wss://relay.damus.io",
@@ -14,6 +14,12 @@ const KIND_HISTORY = 30078; // NIP-78: Application-specific replaceable data
 const D_TAG = "audioplayer-history";
 
 const pool = new SimplePool();
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+}
 
 /**
  * Close all relay connections to avoid resource leaks.
@@ -50,8 +56,11 @@ function isValidPayload(
 export async function saveHistoryToNostr(
   history: HistoryEntry[],
   userPrivateKey: Uint8Array,
-  userPublicKey: string
+  userPublicKey: string,
+  sessionId?: string,
+  signal?: AbortSignal
 ): Promise<void> {
+  throwIfAborted(signal);
   const { ciphertext, ephemeralPubKey } = encryptHistory(history, userPublicKey);
 
   const payload = JSON.stringify({
@@ -60,21 +69,28 @@ export async function saveHistoryToNostr(
     ciphertext,
   });
 
+  const tags = [
+    ["d", D_TAG],
+    ["client", "audioplayer"],
+  ];
+  if (sessionId) {
+    tags.push(["session", sessionId]);
+  }
+
   const event = finalizeEvent(
     {
       kind: KIND_HISTORY,
       created_at: Math.floor(Date.now() / 1000),
-      tags: [
-        ["d", D_TAG],
-        ["client", "audioplayer"],
-      ],
+      tags,
       content: payload,
     },
     userPrivateKey
   );
 
   try {
+    throwIfAborted(signal);
     await Promise.any(pool.publish(RELAYS, event));
+    throwIfAborted(signal);
   } catch (err) {
     // Promise.any throws AggregateError when all promises reject
     if (err instanceof AggregateError) {
@@ -94,14 +110,20 @@ export async function saveHistoryToNostr(
  */
 export async function loadHistoryFromNostr(
   userPrivateKey: Uint8Array,
-  userPublicKey: string
-): Promise<HistoryEntry[] | null> {
-  const events = await pool.querySync(RELAYS, {
-    kinds: [KIND_HISTORY],
-    authors: [userPublicKey],
-    "#d": [D_TAG],
-    limit: 1,
-  });
+  userPublicKey: string,
+  signal?: AbortSignal
+): Promise<{ history: HistoryEntry[]; sessionId: string | null } | null> {
+  throwIfAborted(signal);
+  const events = await pool.querySync(
+    RELAYS,
+    {
+      kinds: [KIND_HISTORY],
+      authors: [userPublicKey],
+      "#d": [D_TAG],
+      limit: 1,
+    }
+  );
+  throwIfAborted(signal);
 
   if (events.length === 0) {
     return null;
@@ -109,6 +131,10 @@ export async function loadHistoryFromNostr(
 
   // Get most recent event
   const latest = events.sort((a, b) => b.created_at - a.created_at)[0];
+
+  // Extract session ID from tags
+  const sessionTag = latest.tags.find((t) => t[0] === "session");
+  const sessionId = sessionTag ? sessionTag[1] : null;
 
   // Parse and validate payload structure
   let payload: unknown;
@@ -125,7 +151,63 @@ export async function loadHistoryFromNostr(
   }
 
   // Decrypt with validated payload
-  return decryptHistory(payload.ciphertext, payload.ephemeralPubKey, userPrivateKey);
+  const history = decryptHistory(
+    payload.ciphertext,
+    payload.ephemeralPubKey,
+    userPrivateKey
+  );
+  return { history, sessionId };
+}
+
+/**
+ * Subscribe to history updates
+ * Returns a cleanup function to unsubscribe
+ */
+export function subscribeToHistory(
+  userPublicKey: string,
+  onEvent: (sessionId: string | null) => void
+): () => void {
+  const canSetOnError = (
+    value: unknown
+  ): value is { onerror?: (err: unknown) => void } => {
+    if (!value || typeof value !== "object") return false;
+    const maybe = value as { onerror?: unknown };
+    return typeof maybe.onerror === "undefined" || typeof maybe.onerror === "function";
+  };
+
+  try {
+    const sub = pool.subscribeMany(
+      RELAYS,
+      {
+        kinds: [KIND_HISTORY],
+        authors: [userPublicKey],
+        "#d": [D_TAG],
+      },
+      {
+        onevent: (event) => {
+          try {
+            const sessionTag = event.tags.find((t) => t[0] === "session");
+            onEvent(sessionTag ? sessionTag[1] : null);
+          } catch (err) {
+            console.error("Nostr history event handler failed:", err);
+          }
+        },
+      }
+    );
+
+    if (canSetOnError(sub)) {
+      sub.onerror = (err) => {
+        console.error("Nostr history subscription error:", err);
+      };
+    }
+
+    return () => {
+      sub.close();
+    };
+  } catch (err) {
+    console.error("Failed to subscribe to Nostr history:", err);
+    return () => {};
+  }
 }
 
 export interface MergeResult {
@@ -134,20 +216,53 @@ export interface MergeResult {
   duplicatesSkipped: number;
 }
 
+export interface MergeOptions {
+  preferRemote?: boolean;
+  preferRemoteOrder?: boolean;
+}
+
 /**
  * Merge cloud history into local history
- * Keep all local entries, only add URLs from cloud that don't exist locally
+ * Keep local order, add URLs from cloud that don't exist locally.
+ * If preferRemote is true, remote entries replace local entries for the same URL.
  */
 export function mergeHistory(
   local: HistoryEntry[],
-  cloud: HistoryEntry[]
+  cloud: HistoryEntry[],
+  options?: MergeOptions
 ): MergeResult {
-  const localUrls = new Set(local.map((e) => e.url));
-  const newFromCloud = cloud.filter((e) => !localUrls.has(e.url));
+  const localByUrl = new Map(local.map((e) => [e.url, e]));
+  const cloudByUrl = new Map(cloud.map((e) => [e.url, e]));
+  const preferRemote = options?.preferRemote === true;
+  const preferRemoteOrder = options?.preferRemoteOrder === true;
+
+  const newFromCloud = cloud.filter((e) => !localByUrl.has(e.url));
   const duplicatesSkipped = cloud.length - newFromCloud.length;
 
+  if (preferRemoteOrder) {
+    const mergedFromRemote = cloud.map((entry) => {
+      if (preferRemote) return entry;
+      const localEntry = localByUrl.get(entry.url);
+      return localEntry ?? entry;
+    });
+
+    const newFromLocal = local.filter((e) => !cloudByUrl.has(e.url));
+
+    return {
+      merged: [...mergedFromRemote, ...newFromLocal],
+      addedFromCloud: newFromCloud.length,
+      duplicatesSkipped,
+    };
+  }
+
+  const merged = local.map((entry) => {
+    if (!preferRemote) return entry;
+    const remote = cloudByUrl.get(entry.url);
+    return remote ?? entry;
+  });
+
   return {
-    merged: [...local, ...newFromCloud],
+    merged: [...merged, ...newFromCloud],
     addedFromCloud: newFromCloud.length,
     duplicatesSkipped,
   };

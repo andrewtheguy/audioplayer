@@ -16,6 +16,16 @@ A web-based audio player with HLS streaming support, built with React, TypeScrip
   - Collapsible history list
 - **Position Persistence** - Saves playback position every 5 seconds
 - **Now Playing** - Displays currently loaded stream URL
+- **Cross-Device Sync** - Sync playback history via Nostr protocol
+  - End-to-end encrypted history storage
+  - Conflict resolution for concurrent multi-device sessions (automatically resolves conflicting active sessions)
+  - Auto-save with debouncing
+
+## Security Note
+
+Security is not a priority for this application. The playlist history is expected to be disposable and essentially public when the shareable playlist URL (the one you copy/share that contains the `#` fragment) is shared. The "secret" is the playlist identifier/access token stored in the URL fragment. The fragment is kept client-side and is not sent to relays or servers in HTTP requests; Nostr keys and relay URLs are separate and are not stored in the fragment. If someone gets the shareable URL, they can see or modify only the playlist audio URLs and playback positions—do not store anything sensitive in this app.
+
+The encryption exists primarily to prevent casual snooping on Nostr relays, not to protect sensitive data. Do not use this application to store or sync anything confidential.
 
 ## Tech Stack
 
@@ -25,6 +35,7 @@ A web-based audio player with HLS streaming support, built with React, TypeScrip
 - Tailwind CSS v4
 - shadcn/ui components
 - hls.js for HLS playback
+- nostr-tools for cross-device sync
 
 ## Getting Started
 

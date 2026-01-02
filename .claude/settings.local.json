@@ -9,7 +9,9 @@
       "Bash(xargs ls:*)",
       "Bash(cat:*)",
       "Bash(git -C /Users/it3/codes/andrew/audioplayer show history_encrypt:src/lib/nostr.ts)",
-      "Bash(git -C /Users/it3/codes/andrew/audioplayer diff main history_encrypt --name-only)"
+      "Bash(git -C /Users/it3/codes/andrew/audioplayer diff main history_encrypt --name-only)",
+      "Bash(tsc:*)",
+      "Bash(npx tsc:*)"
     ],
     "deny": [],
     "ask": []

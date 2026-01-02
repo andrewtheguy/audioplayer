@@ -18,6 +18,13 @@ interface AudioPlayerProps {
   initialUrl?: string;
 }
 
+interface AudioPlayerInnerProps extends AudioPlayerProps {
+  takeoverEntry?: HistoryEntry | null;
+  onTakeoverApplied?: () => void;
+  onRequestReset?: (entry: HistoryEntry | null) => void;
+  sessionId?: string;
+}
+
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || !isFinite(seconds)) return "00:00:00";
   const hrs = Math.floor(seconds / 3600);
@@ -42,6 +49,34 @@ function truncateUrl(url: string, maxLength = 40): string {
 }
 
 export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
+  const [resetKey, setResetKey] = useState(0);
+  const [takeoverEntry, setTakeoverEntry] = useState<HistoryEntry | null>(null);
+  const [sessionId] = useState(() => crypto.randomUUID());
+
+  const handleRequestReset = useCallback((entry: HistoryEntry | null) => {
+    setTakeoverEntry(entry);
+    setResetKey((prev) => prev + 1);
+  }, []);
+
+  return (
+    <AudioPlayerInner
+      key={resetKey}
+      initialUrl={initialUrl}
+      takeoverEntry={takeoverEntry}
+      onTakeoverApplied={() => setTakeoverEntry(null)}
+      onRequestReset={handleRequestReset}
+      sessionId={sessionId}
+    />
+  );
+}
+
+function AudioPlayerInner({
+  initialUrl = "",
+  takeoverEntry,
+  onTakeoverApplied,
+  onRequestReset,
+  sessionId,
+}: AudioPlayerInnerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const saveIntervalRef = useRef<number | null>(null);
@@ -52,6 +87,10 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const gainRef = useRef<number>(1);
   const pausedAtTimestampRef = useRef<number | null>(null);
+  const pendingSeekTimerRef = useRef<number | null>(null);
+  const pendingSeekAttemptsRef = useRef<number>(0);
+  const seekingToTargetRef = useRef<boolean>(false);
+  const pendingSeekPositionRef = useRef<number | null>(null);
 
   const [url, setUrl] = useState(initialUrl);
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
@@ -62,12 +101,12 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const [isLoaded, setIsLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>(() => getHistory());
-  const pendingSeekPositionRef = useRef<number | null>(null);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [isLiveStream, setIsLiveStream] = useState(false);
   const [gainEnabled, setGainEnabled] = useState(false);
   const [gain, setGain] = useState(1); // 1 = 100%
+  const [isSessionStale, setIsSessionStale] = useState(false);
 
   // Keep refs in sync with state for use in callbacks
   useEffect(() => {
@@ -100,6 +139,10 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     audioContextRef.current = ctx;
     sourceNodeRef.current = source;
     gainNodeRef.current = gainNode;
+
+    ctx.resume().catch((err) => {
+      console.error("Failed to resume AudioContext:", err);
+    });
   }, []);
 
   // Apply gain value: 1 if disabled, gain value if enabled
@@ -117,10 +160,12 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     setGainEnabled(!gainEnabled);
   }, [gainEnabled, setupGainNode]);
 
-  // Save current position to history (skip for live streams)
-  const saveCurrentPosition = useCallback(() => {
+  // Save history entry with an explicit position (skip for live streams)
+  const saveHistoryEntry = useCallback((position?: number) => {
     const audio = audioRef.current;
-    if (!audio || !currentUrlRef.current || !isFinite(audio.currentTime)) return;
+    if (!audio || !currentUrlRef.current) return;
+    const resolvedPosition = position ?? audio.currentTime;
+    if (!isFinite(resolvedPosition)) return;
     if (isLiveStreamRef.current) return; // Don't save position for live streams
 
     setHistory((prev) => {
@@ -129,7 +174,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       const entry: HistoryEntry = {
         url: currentUrlRef.current,
         lastPlayedAt: new Date().toISOString(),
-        position: audio.currentTime,
+        position: resolvedPosition,
         // Save gain if currently using gain control, otherwise preserve existing
         gain: gainRef.current !== 1 ? gainRef.current : existingEntry?.gain,
       };
@@ -149,7 +194,10 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   // Start/stop save interval based on playing state (skip for live streams)
   useEffect(() => {
     if (isPlaying && currentUrlRef.current && !isLiveStream) {
-      saveIntervalRef.current = window.setInterval(saveCurrentPosition, SAVE_INTERVAL_MS);
+      saveIntervalRef.current = window.setInterval(
+        saveHistoryEntry,
+        SAVE_INTERVAL_MS
+      );
     } else {
       if (saveIntervalRef.current) {
         clearInterval(saveIntervalRef.current);
@@ -162,24 +210,33 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         clearInterval(saveIntervalRef.current);
       }
     };
-  }, [isPlaying, isLiveStream, saveCurrentPosition]);
+  }, [isPlaying, isLiveStream, saveHistoryEntry]);
 
   // Save on unmount
   useEffect(() => {
     return () => {
-      saveCurrentPosition();
+      saveHistoryEntry();
       if (hlsRef.current) {
         hlsRef.current.destroy();
       }
+      if (audioContextRef.current) {
+        void audioContextRef.current.close().catch((err) => {
+          console.error("Failed to close AudioContext:", err);
+        });
+        audioContextRef.current = null;
+      }
+      if (pendingSeekTimerRef.current) {
+        clearTimeout(pendingSeekTimerRef.current);
+        pendingSeekTimerRef.current = null;
+      }
     };
-  }, [saveCurrentPosition]);
-
+  }, [saveHistoryEntry]);
 
   // Load directly from a history entry (with position)
-  const loadFromHistory = (entry: HistoryEntry) => {
+  const loadFromHistory = useCallback((entry: HistoryEntry, options?: { forceReset?: boolean }) => {
     // Save current position before switching
     if (currentUrlRef.current && currentUrlRef.current !== entry.url) {
-      saveCurrentPosition();
+      saveHistoryEntry();
     }
 
     setError(null);
@@ -194,10 +251,22 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
     // Set pending seek position from history entry
     pendingSeekPositionRef.current = entry.position;
+    pendingSeekAttemptsRef.current = 0;
+    seekingToTargetRef.current = false;
+    if (pendingSeekTimerRef.current) {
+      clearTimeout(pendingSeekTimerRef.current);
+      pendingSeekTimerRef.current = null;
+    }
     const urlToLoad = entry.url;
 
     const audio = audioRef.current;
     if (!audio) return;
+
+    if (options?.forceReset) {
+      audio.pause();
+      audio.src = "";
+      audio.load();
+    }
 
     if (hlsRef.current) {
       hlsRef.current.destroy();
@@ -211,14 +280,6 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       setIsLoaded(true);
       setNowPlaying(urlToLoad);
       setUrl("");
-      // Apply pending seek position
-      if (pendingSeekPositionRef.current !== null) {
-        const seekTo = pendingSeekPositionRef.current;
-        pendingSeekPositionRef.current = null;
-        if (audio) {
-          audio.currentTime = seekTo;
-        }
-      }
     };
 
     if (urlToLoad.includes(".m3u8")) {
@@ -262,7 +323,17 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       audio.src = urlToLoad;
       onLoadSuccess();
     }
-  };
+  }, [saveHistoryEntry]);
+
+  useEffect(() => {
+    if (!takeoverEntry) return;
+    // Defer to next tick so the component is mounted before we mutate state/DOM.
+    const timeoutId = window.setTimeout(() => {
+      loadFromHistory(takeoverEntry, { forceReset: true });
+      onTakeoverApplied?.();
+    }, 0);
+    return () => clearTimeout(timeoutId);
+  }, [takeoverEntry, loadFromHistory, onTakeoverApplied]);
 
   // Load a URL - redirects to loadFromHistory if URL exists in history
   const loadUrl = (urlToLoad: string) => {
@@ -274,7 +345,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
     // Fresh load (no history entry)
     if (currentUrlRef.current && currentUrlRef.current !== urlToLoad) {
-      saveCurrentPosition();
+      saveHistoryEntry();
     }
 
     setError(null);
@@ -283,6 +354,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     setCurrentTime(0);
     setDuration(0);
     setIsLiveStream(false);
+    isLiveStreamRef.current = false;
     setGainEnabled(false);
     setGain(1);
     pendingSeekPositionRef.current = null;
@@ -301,6 +373,8 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       setIsLoaded(true);
       setNowPlaying(urlToLoad);
       setUrl("");
+      // Add to history immediately upon load success
+      saveHistoryEntry(0);
     };
 
     if (urlToLoad.includes(".m3u8")) {
@@ -315,6 +389,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         hls.on(Hls.Events.LEVEL_LOADED, (_event, data) => {
           const isLive = data.details.live === true;
           setIsLiveStream(isLive);
+          isLiveStreamRef.current = isLive;
           if (!hasCalledLoadSuccess) {
             hasCalledLoadSuccess = true;
             onLoadSuccess();
@@ -356,6 +431,12 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     if (isPlaying) {
       audio.pause();
     } else {
+      const ctx = audioContextRef.current;
+      if (ctx && ctx.state === "suspended") {
+        ctx.resume().catch((err) => {
+          console.error("Failed to resume AudioContext:", err);
+        });
+      }
       audio.play().catch((e) => {
         setError(`Playback error: ${e.message}`);
       });
@@ -366,6 +447,90 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     const audio = audioRef.current;
     if (audio) {
       setCurrentTime(audio.currentTime);
+      if (pendingSeekPositionRef.current !== null) {
+        applyPendingSeek();
+      }
+    }
+  };
+
+  const schedulePendingSeekRetry = () => {
+    // seekingToTargetRef tracks an in-flight programmatic seek (block duplicates);
+    // pendingSeekTimerRef schedules retries when seeked doesn't fire and is cleared on success/max attempts.
+    if (pendingSeekTimerRef.current) return;
+    pendingSeekTimerRef.current = window.setTimeout(() => {
+      pendingSeekTimerRef.current = null;
+      applyPendingSeek();
+    }, 250);
+  };
+
+  const applyPendingSeek = () => {
+    const audio = audioRef.current;
+    const pending = pendingSeekPositionRef.current;
+    if (!audio || pending === null) return;
+    if (isLiveStreamRef.current) {
+      pendingSeekPositionRef.current = null;
+      seekingToTargetRef.current = false;
+      return;
+    }
+    if (!isFinite(pending) || pending < 0) {
+      pendingSeekPositionRef.current = null;
+      seekingToTargetRef.current = false;
+      return;
+    }
+    if (audio.seekable.length === 0) {
+      schedulePendingSeekRetry();
+      return;
+    }
+    if (pendingSeekAttemptsRef.current >= 20) {
+      console.warn("Seek to saved position failed after max retries");
+      pendingSeekPositionRef.current = null;
+      seekingToTargetRef.current = false;
+      return;
+    }
+
+    // Check if we're already at the target position (from a previous successful seek)
+    if (Math.abs(audio.currentTime - pending) <= 0.5) {
+      pendingSeekPositionRef.current = null;
+      seekingToTargetRef.current = false;
+      if (pendingSeekTimerRef.current) {
+        clearTimeout(pendingSeekTimerRef.current);
+        pendingSeekTimerRef.current = null;
+      }
+      return;
+    }
+
+    // If we're already seeking to target, wait for seeked event
+    if (seekingToTargetRef.current) {
+      return;
+    }
+
+    pendingSeekAttemptsRef.current += 1;
+    seekingToTargetRef.current = true;
+    audio.currentTime = pending;
+    setCurrentTime(pending);
+
+    // Schedule a retry in case seeked event doesn't fire
+    schedulePendingSeekRetry();
+  };
+
+  const handleSeeked = () => {
+    const audio = audioRef.current;
+    const pending = pendingSeekPositionRef.current;
+
+    seekingToTargetRef.current = false;
+
+    if (!audio || pending === null) return;
+
+    // Check if we've reached the target position
+    if (Math.abs(audio.currentTime - pending) <= 0.5) {
+      pendingSeekPositionRef.current = null;
+      if (pendingSeekTimerRef.current) {
+        clearTimeout(pendingSeekTimerRef.current);
+        pendingSeekTimerRef.current = null;
+      }
+    } else {
+      // Seek didn't land at target, retry
+      schedulePendingSeekRetry();
     }
   };
 
@@ -374,12 +539,13 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     if (audio) {
       setDuration(audio.duration);
     }
+    applyPendingSeek();
   };
 
   const handlePause = () => {
     setIsPlaying(false);
     pausedAtTimestampRef.current = Date.now();
-    saveCurrentPosition();
+    saveHistoryEntry();
   };
 
   const handleSeek = (value: number[]) => {
@@ -512,10 +678,18 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying]);
+  }, [isPlaying, loadFromHistory]);
 
   const showLiveCta = isLiveStream && !isPlaying;
+  const handleSessionStatusChange = useCallback((status: "unclaimed" | "active" | "stale" | "unknown") => {
+    setIsSessionStale(status === "stale");
+    if (status === "stale") {
+      const audio = audioRef.current;
+      if (audio && !audio.paused) {
+        audio.pause();
+      }
+    }
+  }, []);
 
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6">
@@ -528,16 +702,23 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="Enter HLS URL (.m3u8)"
-            onKeyDown={(e) => e.key === "Enter" && loadStream()}
+            onKeyDown={(e) => e.key === "Enter" && !isSessionStale && loadStream()}
+            disabled={isSessionStale}
           />
-          <Button onClick={() => loadStream()}>Load</Button>
+          <Button onClick={() => loadStream()} disabled={isSessionStale}>Load</Button>
         </div>
       </div>
 
-      {error && (
-        <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
-          {error}
+      {isSessionStale ? (
+        <div className="text-sm text-amber-700 bg-amber-500/10 border border-amber-500/20 p-3 rounded-md">
+          Session taken over by another tab/device. Controls are disabled.
         </div>
+      ) : (
+        error && (
+          <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
+            {error}
+          </div>
+        )
       )}
 
       {/* Now Playing */}
@@ -565,7 +746,11 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         ref={audioRef}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
-        onPlay={() => setIsPlaying(true)}
+        onCanPlay={applyPendingSeek}
+        onPlay={() => {
+          setIsPlaying(true);
+        }}
+        onSeeked={handleSeeked}
         onPause={handlePause}
         onEnded={() => setIsPlaying(false)}
         onError={() => setError("Audio playback error")}
@@ -575,15 +760,15 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         <div className="flex items-center justify-center gap-4">
           <button
             onClick={() => seekRelative(-15)}
-            disabled={!isLoaded || isLiveStream}
+            disabled={!isLoaded || isLiveStream || isSessionStale}
             className="flex items-center justify-center h-12 w-12 rounded-full border border-border bg-card text-muted-foreground shadow-sm transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:border-dashed disabled:bg-muted/40 disabled:text-muted-foreground/70"
-            title={isLiveStream ? "Seeking disabled for live" : "Back 15 seconds"}
+            title={isSessionStale ? "Take over session first" : isLiveStream ? "Seeking disabled for live" : "Back 15 seconds"}
           >
             <Skip15BackIcon className="w-10 h-10" />
           </button>
           <button
             onClick={togglePlayPause}
-            disabled={!isLoaded}
+            disabled={!isLoaded || isSessionStale}
             className="flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed hover:scale-105 transition-transform"
           >
             {isPlaying ? (
@@ -594,9 +779,9 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
           </button>
           <button
             onClick={() => seekRelative(30)}
-            disabled={!isLoaded || isLiveStream}
+            disabled={!isLoaded || isLiveStream || isSessionStale}
             className="flex items-center justify-center h-12 w-12 rounded-full border border-border bg-card text-muted-foreground shadow-sm transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:border-dashed disabled:bg-muted/40 disabled:text-muted-foreground/70"
-            title={isLiveStream ? "Seeking disabled for live" : "Forward 30 seconds"}
+            title={isSessionStale ? "Take over session first" : isLiveStream ? "Seeking disabled for live" : "Forward 30 seconds"}
           >
             <Skip30ForwardIcon className="w-10 h-10" />
           </button>
@@ -624,6 +809,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
                 size="sm"
                 variant="outline"
                 onClick={jumpToLiveEdge}
+                disabled={isSessionStale}
                 className="border-red-200 text-red-700 hover:bg-red-50"
               >
                 Go live
@@ -637,7 +823,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
               max={duration || 100}
               step={1}
               onValueChange={handleSeek}
-              disabled={!isLoaded || !isFinite(duration)}
+              disabled={!isLoaded || !isFinite(duration) || isSessionStale}
               className="w-full"
             />
             <div className="flex justify-between text-xs text-muted-foreground">
@@ -654,6 +840,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
             max={1}
             step={0.01}
             onValueChange={handleVolumeChange}
+            disabled={isSessionStale}
             className="w-24"
           />
         </div>
@@ -662,7 +849,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         <div className="flex items-center gap-3">
           <button
             onClick={handleGainToggle}
-            disabled={!isLoaded}
+            disabled={!isLoaded || isSessionStale}
             className={`text-xs px-2 py-1 rounded border transition-colors ${
               gainEnabled
                 ? "bg-primary text-primary-foreground border-primary"
@@ -680,6 +867,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
                 max={3}
                 step={0.1}
                 onValueChange={(v) => setGain(v[0])}
+                disabled={isSessionStale}
                 className="w-24"
               />
               <span className="text-xs text-muted-foreground w-12">
@@ -707,8 +895,12 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
                   {history.map((entry) => (
                     <div
                       key={entry.url}
-                      onClick={() => handleHistorySelect(entry)}
-                      className="flex items-center justify-between p-2 rounded hover:bg-accent cursor-pointer group"
+                      onClick={() => !isSessionStale && handleHistorySelect(entry)}
+                      className={`flex items-center justify-between p-2 rounded group ${
+                        isSessionStale
+                          ? "cursor-not-allowed opacity-60"
+                          : "hover:bg-accent cursor-pointer"
+                      }`}
                     >
                       <div className="flex-1 min-w-0 mr-2">
                         <div className="text-sm truncate" title={entry.url}>
@@ -732,7 +924,8 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
                           variant="ghost"
                           size="sm"
                           onClick={(e) => handleDeleteEntry(e, entry.url)}
-                          className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                          disabled={isSessionStale}
+                          className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 text-muted-foreground hover:text-destructive disabled:cursor-not-allowed"
                           title="Delete"
                         >
                           <XIcon className="w-4 h-4" />
@@ -745,6 +938,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
                   variant="ghost"
                   size="sm"
                   onClick={handleClearHistory}
+                  disabled={isSessionStale}
                   className="text-xs text-muted-foreground hover:text-destructive"
                 >
                   Clear All
@@ -759,6 +953,11 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
             setHistory(merged);
             saveHistory(merged);
           }}
+          onSessionStatusChange={handleSessionStatusChange}
+          onTakeOver={(remoteHistory) => {
+            onRequestReset?.(remoteHistory.length > 0 ? remoteHistory[0] : null);
+          }}
+          sessionId={sessionId}
         />
       </div>
     </div>
