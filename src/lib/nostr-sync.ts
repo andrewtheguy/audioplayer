@@ -50,7 +50,8 @@ function isValidPayload(
 export async function saveHistoryToNostr(
   history: HistoryEntry[],
   userPrivateKey: Uint8Array,
-  userPublicKey: string
+  userPublicKey: string,
+  sessionId?: string
 ): Promise<void> {
   const { ciphertext, ephemeralPubKey } = encryptHistory(history, userPublicKey);
 
@@ -60,14 +61,19 @@ export async function saveHistoryToNostr(
     ciphertext,
   });
 
+  const tags = [
+    ["d", D_TAG],
+    ["client", "audioplayer"],
+  ];
+  if (sessionId) {
+    tags.push(["session", sessionId]);
+  }
+
   const event = finalizeEvent(
     {
       kind: KIND_HISTORY,
       created_at: Math.floor(Date.now() / 1000),
-      tags: [
-        ["d", D_TAG],
-        ["client", "audioplayer"],
-      ],
+      tags,
       content: payload,
     },
     userPrivateKey
@@ -95,13 +101,16 @@ export async function saveHistoryToNostr(
 export async function loadHistoryFromNostr(
   userPrivateKey: Uint8Array,
   userPublicKey: string
-): Promise<HistoryEntry[] | null> {
-  const events = await pool.querySync(RELAYS, {
-    kinds: [KIND_HISTORY],
-    authors: [userPublicKey],
-    "#d": [D_TAG],
-    limit: 1,
-  });
+): Promise<{ history: HistoryEntry[]; sessionId: string | null } | null> {
+  const events = await pool.querySync(
+    RELAYS,
+    {
+      kinds: [KIND_HISTORY],
+      authors: [userPublicKey],
+      "#d": [D_TAG],
+      limit: 1,
+    }
+  );
 
   if (events.length === 0) {
     return null;
@@ -109,6 +118,10 @@ export async function loadHistoryFromNostr(
 
   // Get most recent event
   const latest = events.sort((a, b) => b.created_at - a.created_at)[0];
+
+  // Extract session ID from tags
+  const sessionTag = latest.tags.find((t) => t[0] === "session");
+  const sessionId = sessionTag ? sessionTag[1] : null;
 
   // Parse and validate payload structure
   let payload: unknown;
@@ -125,7 +138,40 @@ export async function loadHistoryFromNostr(
   }
 
   // Decrypt with validated payload
-  return decryptHistory(payload.ciphertext, payload.ephemeralPubKey, userPrivateKey);
+  const history = decryptHistory(
+    payload.ciphertext,
+    payload.ephemeralPubKey,
+    userPrivateKey
+  );
+  return { history, sessionId };
+}
+
+/**
+ * Subscribe to history updates
+ * Returns a cleanup function to unsubscribe
+ */
+export function subscribeToHistory(
+  userPublicKey: string,
+  onEvent: (sessionId: string | null) => void
+): () => void {
+  const sub = pool.subscribeMany(
+    RELAYS,
+    {
+        kinds: [KIND_HISTORY],
+        authors: [userPublicKey],
+        "#d": [D_TAG],
+    },
+    {
+      onevent: (event) => {
+        const sessionTag = event.tags.find((t) => t[0] === "session");
+        onEvent(sessionTag ? sessionTag[1] : null);
+      },
+    }
+  );
+
+  return () => {
+    sub.close();
+  };
 }
 
 export interface MergeResult {
@@ -134,20 +180,53 @@ export interface MergeResult {
   duplicatesSkipped: number;
 }
 
+export interface MergeOptions {
+  preferRemote?: boolean;
+  preferRemoteOrder?: boolean;
+}
+
 /**
  * Merge cloud history into local history
- * Keep all local entries, only add URLs from cloud that don't exist locally
+ * Keep local order, add URLs from cloud that don't exist locally.
+ * If preferRemote is true, remote entries replace local entries for the same URL.
  */
 export function mergeHistory(
   local: HistoryEntry[],
-  cloud: HistoryEntry[]
+  cloud: HistoryEntry[],
+  options?: MergeOptions
 ): MergeResult {
-  const localUrls = new Set(local.map((e) => e.url));
-  const newFromCloud = cloud.filter((e) => !localUrls.has(e.url));
+  const localByUrl = new Map(local.map((e) => [e.url, e]));
+  const cloudByUrl = new Map(cloud.map((e) => [e.url, e]));
+  const preferRemote = options?.preferRemote === true;
+  const preferRemoteOrder = options?.preferRemoteOrder === true;
+
+  const newFromCloud = cloud.filter((e) => !localByUrl.has(e.url));
   const duplicatesSkipped = cloud.length - newFromCloud.length;
 
+  if (preferRemoteOrder) {
+    const mergedFromRemote = cloud.map((entry) => {
+      if (preferRemote) return entry;
+      const localEntry = localByUrl.get(entry.url);
+      return localEntry ?? entry;
+    });
+
+    const newFromLocal = local.filter((e) => !cloudByUrl.has(e.url));
+
+    return {
+      merged: [...mergedFromRemote, ...newFromLocal],
+      addedFromCloud: newFromCloud.length,
+      duplicatesSkipped,
+    };
+  }
+
+  const merged = local.map((entry) => {
+    if (!preferRemote) return entry;
+    const remote = cloudByUrl.get(entry.url);
+    return remote ?? entry;
+  });
+
   return {
-    merged: [...local, ...newFromCloud],
+    merged: [...merged, ...newFromCloud],
     addedFromCloud: newFromCloud.length,
     duplicatesSkipped,
   };

@@ -7,132 +7,55 @@ export interface NostrKeys {
   publicKey: string;
 }
 
-// Fixed salt for all users - intentional for deterministic key derivation.
-// The same PIN must always produce the same Nostr keypair so users can
-// recover their data on any device without storing anything locally.
-// The salt provides domain separation (same PIN in different apps = different keys).
-// Note: This is separate from the IV/nonce used in NIP-44 encryption, which is
-// random for each encryption operation (providing semantic security).
-const SALT = "audioplayer-pin-nostr-v1";
-const ITERATIONS = 100000;
-
-// PIN format: version prefix (1 char) + random data (14 chars) + checksum (1 char) = 16 chars
-const PIN_LENGTH = 16;
-const PIN_VERSION = "a"; // Version 1
-const RANDOM_CHARS_LENGTH = 14;
-
-// Printable non-space ASCII characters (33-126) for PIN generation
-// 94 characters total: !"#$%&'()*+,-./0-9:;<=>?@A-Z[\]^_`a-z{|}~
-const PRINTABLE_CHARS = Array.from({ length: 94 }, (_, i) =>
-  String.fromCharCode(33 + i)
-).join("");
+// Fixed salt for domain separation
+const SALT = "audioplayer-secret-nostr-v1";
 
 /**
- * Compute checksum character from data string.
- * Sum of ASCII codes mod 94, mapped to printable chars.
+ * Generate a random URL-safe Base64 secret.
+ * Uses 12 bytes of entropy (96 bits), resulting in a 16-character string.
  */
-function computeChecksum(data: string): string {
-  let sum = 0;
-  for (let i = 0; i < data.length; i++) {
-    sum += data.charCodeAt(i);
-  }
-  return PRINTABLE_CHARS[sum % 94];
+export function generateSecret(): string {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 /**
- * Generate a uniform random index into PRINTABLE_CHARS (0-93) using rejection sampling.
- * Rejects bytes >= 188 (94 * 2) to avoid modulo bias.
+ * Derive Nostr secp256k1 keypair from a secret string using SHA-256.
+ * Uses a fixed salt to prevent rainbow table attacks if secrets are leaked,
+ * though the secrets themselves are high-entropy random strings.
  */
-function getUniformRandomIndex(): number {
-  const buffer = new Uint8Array(1);
-  while (true) {
-    crypto.getRandomValues(buffer);
-    if (buffer[0] < 188) {
-      return buffer[0] % 94;
-    }
-    // Reject and retry if >= 188
+export async function deriveNostrKeys(secret: string): Promise<NostrKeys> {
+  if (!secret) {
+    throw new Error("Secret cannot be empty");
   }
-}
-
-/**
- * Generate a cryptographically random PIN.
- * Format: 'a' (version) + 14 random printable chars + 1 checksum char = 16 chars total
- * Uses rejection sampling to ensure uniform distribution of characters.
- */
-export function generatePin(): string {
-  let randomPart = "";
-  for (let i = 0; i < RANDOM_CHARS_LENGTH; i++) {
-    randomPart += PRINTABLE_CHARS[getUniformRandomIndex()];
-  }
-
-  const dataWithoutChecksum = PIN_VERSION + randomPart;
-  const checksum = computeChecksum(dataWithoutChecksum);
-
-  return dataWithoutChecksum + checksum;
-}
-
-/**
- * Validate PIN format: version prefix, length, and checksum
- */
-function validatePinFormat(pin: string): void {
-  if (pin.length !== PIN_LENGTH) {
-    throw new Error(`Invalid PIN: must be exactly ${PIN_LENGTH} characters`);
-  }
-
-  if (!pin.startsWith(PIN_VERSION)) {
-    throw new Error(`Invalid PIN: unrecognized version`);
-  }
-
-  const dataWithoutChecksum = pin.slice(0, -1);
-  const providedChecksum = pin.slice(-1);
-  const expectedChecksum = computeChecksum(dataWithoutChecksum);
-
-  if (providedChecksum !== expectedChecksum) {
-    throw new Error("Invalid PIN: checksum mismatch (typo or corrupted)");
-  }
-}
-
-/**
- * Derive Nostr secp256k1 keypair from PIN using PBKDF2
- * Validates PIN format and ensures derived key is valid for secp256k1
- */
-export async function deriveNostrKeysFromPin(pin: string): Promise<NostrKeys> {
-  validatePinFormat(pin);
 
   const encoder = new TextEncoder();
-  const pinBytes = encoder.encode(pin);
+  const secretBytes = encoder.encode(secret);
   const saltBytes = encoder.encode(SALT);
 
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw",
-    pinBytes,
-    "PBKDF2",
-    false,
-    ["deriveBits"]
-  );
+  // Combine secret and salt
+  const combined = new Uint8Array(secretBytes.length + saltBytes.length);
+  combined.set(secretBytes);
+  combined.set(saltBytes, secretBytes.length);
 
-  const derivedBits = await crypto.subtle.deriveBits(
-    {
-      name: "PBKDF2",
-      salt: saltBytes,
-      iterations: ITERATIONS,
-      hash: "SHA-256",
-    },
-    keyMaterial,
-    256
-  );
-
-  const privateKey = new Uint8Array(derivedBits);
+  // Hash using SHA-256 to get 32 bytes (256 bits) for the private key
+  const hashBuffer = await crypto.subtle.digest("SHA-256", combined);
+  const privateKey = new Uint8Array(hashBuffer);
 
   // Validate the derived key is a valid secp256k1 private key
-  // by attempting to derive the public key (will throw if invalid)
+  // by attempting to derive the public key
   let publicKey: string;
   try {
     publicKey = getPublicKey(privateKey);
   } catch {
-    // Extremely rare: derived bytes outside secp256k1 curve order
+    // Extremely rare case where hash output is invalid for secp256k1
+    // (outside curve order). Practically negligible probability.
     throw new Error(
-      "Derived key is invalid for secp256k1. Please use a different PIN."
+      "Derived key is invalid. Please generate a new secret."
     );
   }
 
@@ -203,7 +126,7 @@ export function decryptHistory(
     plaintext = decrypt(ciphertext, conversationKey);
   } catch (err) {
     throw new Error(
-      `Decryption failed: ${err instanceof Error ? err.message : "Unknown error"}. Wrong PIN?`
+      `Decryption failed: ${err instanceof Error ? err.message : "Unknown error"}. Wrong Secret?`
     );
   }
 

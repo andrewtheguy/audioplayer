@@ -176,7 +176,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
 
   // Load directly from a history entry (with position)
-  const loadFromHistory = (entry: HistoryEntry) => {
+  const loadFromHistory = useCallback((entry: HistoryEntry) => {
     // Save current position before switching
     if (currentUrlRef.current && currentUrlRef.current !== entry.url) {
       saveCurrentPosition();
@@ -262,7 +262,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       audio.src = urlToLoad;
       onLoadSuccess();
     }
-  };
+  }, [saveCurrentPosition]);
 
   // Load a URL - redirects to loadFromHistory if URL exists in history
   const loadUrl = (urlToLoad: string) => {
@@ -283,6 +283,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     setCurrentTime(0);
     setDuration(0);
     setIsLiveStream(false);
+    isLiveStreamRef.current = false;
     setGainEnabled(false);
     setGain(1);
     pendingSeekPositionRef.current = null;
@@ -301,6 +302,8 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       setIsLoaded(true);
       setNowPlaying(urlToLoad);
       setUrl("");
+      // Add to history immediately upon load success
+      saveCurrentPosition();
     };
 
     if (urlToLoad.includes(".m3u8")) {
@@ -315,6 +318,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         hls.on(Hls.Events.LEVEL_LOADED, (_event, data) => {
           const isLive = data.details.live === true;
           setIsLiveStream(isLive);
+          isLiveStreamRef.current = isLive;
           if (!hasCalledLoadSuccess) {
             hasCalledLoadSuccess = true;
             onLoadSuccess();
@@ -512,10 +516,16 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying]);
+  }, [isPlaying, loadFromHistory]);
 
   const showLiveCta = isLiveStream && !isPlaying;
+  const handleSessionStatusChange = useCallback((status: "unclaimed" | "active" | "stale" | "unknown") => {
+    if (status !== "stale") return;
+    const audio = audioRef.current;
+    if (audio && !audio.paused) {
+      audio.pause();
+    }
+  }, []);
 
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6">
@@ -758,6 +768,12 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
           onHistoryLoaded={(merged) => {
             setHistory(merged);
             saveHistory(merged);
+          }}
+          onSessionStatusChange={handleSessionStatusChange}
+          onTakeOver={(remoteHistory) => {
+            if (remoteHistory.length > 0) {
+              loadFromHistory(remoteHistory[0]);
+            }
           }}
         />
       </div>
