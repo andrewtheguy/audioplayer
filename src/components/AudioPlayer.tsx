@@ -283,6 +283,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     setCurrentTime(0);
     setDuration(0);
     setIsLiveStream(false);
+    isLiveStreamRef.current = false;
     setGainEnabled(false);
     setGain(1);
     pendingSeekPositionRef.current = null;
@@ -301,6 +302,8 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       setIsLoaded(true);
       setNowPlaying(urlToLoad);
       setUrl("");
+      // Add to history immediately upon load success
+      saveCurrentPosition();
     };
 
     if (urlToLoad.includes(".m3u8")) {
@@ -315,6 +318,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
         hls.on(Hls.Events.LEVEL_LOADED, (_event, data) => {
           const isLive = data.details.live === true;
           setIsLiveStream(isLive);
+          isLiveStreamRef.current = isLive;
           if (!hasCalledLoadSuccess) {
             hasCalledLoadSuccess = true;
             onLoadSuccess();
