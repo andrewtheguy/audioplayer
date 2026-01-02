@@ -1,7 +1,7 @@
 import { finalizeEvent } from "nostr-tools/pure";
 import { SimplePool } from "nostr-tools/pool";
 import type { HistoryEntry } from "./history";
-import { encryptHistory, decryptHistory } from "./pin-crypto";
+import { encryptHistory, decryptHistory } from "./nostr-crypto";
 
 export const RELAYS = [
   "wss://relay.damus.io",

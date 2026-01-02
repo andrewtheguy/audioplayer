@@ -37,14 +37,24 @@ export async function deriveNostrKeys(secret: string): Promise<NostrKeys> {
   const secretBytes = encoder.encode(secret);
   const saltBytes = encoder.encode(SALT);
 
-  // Combine secret and salt
-  const combined = new Uint8Array(secretBytes.length + saltBytes.length);
-  combined.set(secretBytes);
-  combined.set(saltBytes, secretBytes.length);
-
-  // Hash using SHA-256 to get 32 bytes (256 bits) for the private key
-  const hashBuffer = await crypto.subtle.digest("SHA-256", combined);
-  const privateKey = new Uint8Array(hashBuffer);
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    secretBytes,
+    "HKDF",
+    false,
+    ["deriveBits"]
+  );
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: saltBytes,
+      info: new Uint8Array(0),
+    },
+    keyMaterial,
+    256
+  );
+  const privateKey = new Uint8Array(derivedBits);
 
   // Validate the derived key is a valid secp256k1 private key
   // by attempting to derive the public key

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { deriveNostrKeys } from "@/lib/pin-crypto";
+import { deriveNostrKeys } from "@/lib/nostr-crypto";
 import {
   loadHistoryFromNostr,
   mergeHistory,

@@ -25,7 +25,7 @@ src/
 └── lib/
     ├── history.ts           # Local history persistence (localStorage)
     ├── nostr-sync.ts        # Nostr relay communication
-    ├── pin-crypto.ts        # Key derivation and encryption
+    ├── nostr-crypto.ts      # Key derivation and encryption
     └── utils.ts             # Utility functions (cn)
 ```
 
@@ -130,12 +130,12 @@ Nostr protocol integration for cloud sync.
 - `subscribeToHistory()`: Real-time subscription for session changes
 - `mergeHistory()`: Combines local and cloud history with conflict resolution
 
-### pin-crypto.ts
+### nostr-crypto.ts
 
 Cryptographic utilities for secure sync.
 
 **Key derivation:**
-- User secret (URL hash) → SHA-256 with salt → secp256k1 keypair
+- User secret (URL hash) → HKDF-SHA256 with salt → secp256k1 keypair
 - Secret is 96-bit random, URL-safe Base64 encoded
 
 **Encryption (NIP-44):**

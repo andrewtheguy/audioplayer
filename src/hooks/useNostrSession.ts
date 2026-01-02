@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { deriveNostrKeys } from "@/lib/pin-crypto";
+import { deriveNostrKeys } from "@/lib/nostr-crypto";
 import { loadHistoryFromNostr, subscribeToHistory } from "@/lib/nostr-sync";
 
 export type SessionStatus = "unclaimed" | "active" | "stale" | "unknown";

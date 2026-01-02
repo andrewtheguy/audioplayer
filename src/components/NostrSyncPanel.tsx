@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { generateSecret } from "@/lib/pin-crypto";
+import { generateSecret } from "@/lib/nostr-crypto";
 import { RELAYS } from "@/lib/nostr-sync";
 import type { HistoryEntry } from "@/lib/history";
 import { cn } from "@/lib/utils";
