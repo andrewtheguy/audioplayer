@@ -502,7 +502,7 @@ export function useNostrSync({
           setMessage(`Loaded ${cloudHistory.length} entries`);
         } else {
           setStatus("success");
-          setMessage("No history found. Click Start Session to begin.");
+          setMessage("No synced history found.");
         }
         dirtyRef.current = false;
       } catch (err) {
