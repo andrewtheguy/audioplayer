@@ -6,7 +6,7 @@ import {
   saveHistoryToNostr,
   subscribeToHistoryDetailed,
 } from "@/lib/nostr-sync";
-import type { HistoryEntry } from "@/lib/history";
+import type { HistoryEntry, HistoryPayload } from "@/lib/history";
 import type { SessionStatus } from "@/hooks/useNostrSession";
 
 type SyncStatus = "idle" | "saving" | "loading" | "success" | "error";
@@ -26,10 +26,13 @@ interface UseNostrSyncOptions {
   setSessionNotice: (notice: string | null) => void;
   clearSessionNotice: () => void;
   startTakeoverGrace: () => void;
+  ignoreRemoteUntil: number; // Grace period timestamp from useNostrSession
   onHistoryLoaded: (merged: HistoryEntry[]) => void;
   onTakeOver?: (remoteHistory: HistoryEntry[]) => void;
   onRemoteSync?: (remoteHistory: HistoryEntry[]) => void;
+  isPlayingRef?: React.RefObject<boolean>; // For frequent position updates during playback
   debounceSaveMs?: number;
+  positionSaveIntervalMs?: number; // Interval for live position updates (default 1500ms)
   operationTimeoutMs?: number;
 }
 
@@ -51,6 +54,7 @@ interface UseNostrSyncResult {
 }
 
 const DEFAULT_DEBOUNCE_SAVE_MS = 5000;
+const DEFAULT_POSITION_SAVE_INTERVAL_MS = 1500; // Live position updates every 1.5s
 const DEFAULT_OPERATION_TIMEOUT_MS = 30000;
 
 class TimeoutError extends Error {
@@ -103,10 +107,13 @@ export function useNostrSync({
   setSessionNotice,
   clearSessionNotice,
   startTakeoverGrace,
+  ignoreRemoteUntil,
   onHistoryLoaded,
   onTakeOver,
   onRemoteSync,
+  isPlayingRef,
   debounceSaveMs = DEFAULT_DEBOUNCE_SAVE_MS,
+  positionSaveIntervalMs = DEFAULT_POSITION_SAVE_INTERVAL_MS,
   operationTimeoutMs = DEFAULT_OPERATION_TIMEOUT_MS,
 }: UseNostrSyncOptions): UseNostrSyncResult {
   const [status, setStatus] = useState<SyncStatus>("idle");
@@ -124,8 +131,6 @@ export function useNostrSync({
   const hasMountedRef = useRef(false);
   const mountedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
-  const followRemoteInFlightRef = useRef(false);
-  const lastRemoteCreatedAtRef = useRef(0);
   const performLoadRef = useRef<
     ((
       currentSecret: string,
@@ -133,6 +138,12 @@ export function useNostrSync({
       options?: { followRemote?: boolean; silent?: boolean }
     ) => Promise<void>) | null
   >(null);
+
+  // NostrPad-style refs for reliable syncing
+  const latestTimestampRef = useRef<number>(0); // Milliseconds from payload
+  const isLocalChangeRef = useRef<boolean>(false); // Protect local changes during sync
+  const pendingPublishRef = useRef<boolean>(false); // Prevent duplicate publishes
+  const ignoreRemoteUntilRef = useRef<number>(ignoreRemoteUntil);
 
   const isActive = useCallback(
     () => mountedRef.current && !abortRef.current?.signal.aborted,
@@ -163,6 +174,10 @@ export function useNostrSync({
   }, [sessionStatus]);
 
   useEffect(() => {
+    ignoreRemoteUntilRef.current = ignoreRemoteUntil;
+  }, [ignoreRemoteUntil]);
+
+  useEffect(() => {
     if (!hasMountedRef.current) {
       hasMountedRef.current = true;
       return;
@@ -178,9 +193,10 @@ export function useNostrSync({
     async (
       currentSecret: string,
       historyToSave: HistoryEntry[],
-      options?: { allowStale?: boolean }
+      options?: { allowStale?: boolean; silent?: boolean }
     ) => {
       if (!currentSecret || !isActive()) return false;
+      if (pendingPublishRef.current) return false; // Prevent duplicate publishes
       const signal = abortRef.current?.signal;
       if (signal?.aborted) return false;
 
@@ -192,6 +208,8 @@ export function useNostrSync({
         return false;
       }
 
+      pendingPublishRef.current = true;
+
       try {
         const keys = await withTimeout(
           deriveNostrKeys(currentSecret, signal),
@@ -202,7 +220,9 @@ export function useNostrSync({
           console.warn("Session became stale before save. Ignoring.");
           return false;
         }
-        setStatus("saving");
+        if (!options?.silent) {
+          setStatus("saving");
+        }
         await withTimeout(
           saveHistoryToNostr(
             historyToSave,
@@ -214,6 +234,10 @@ export function useNostrSync({
           operationTimeoutMs
         );
         if (!isActive()) return false;
+
+        // Update our timestamp ref to the time we just published
+        latestTimestampRef.current = Date.now();
+
         const fingerprint = await getSecretFingerprint(currentSecret);
         if (!isActive()) return false;
         setLastOperation({
@@ -221,19 +245,26 @@ export function useNostrSync({
           fingerprint,
           timestamp: formatTimestamp(new Date()),
         });
-        setStatus("success");
-        setMessage(`Saved ${historyToSave.length} entries`);
+        if (!options?.silent) {
+          setStatus("success");
+          setMessage(`Saved ${historyToSave.length} entries`);
+        }
         dirtyRef.current = false;
         return true;
       } catch (err) {
         if (!isActive()) return false;
-        setStatus("error");
-        if (err instanceof TimeoutError) {
-          setMessage("Save timed out. Check connection.");
-        } else {
-          setMessage(err instanceof Error ? err.message : "Failed to save");
+        if (!options?.silent) {
+          setStatus("error");
+          if (err instanceof TimeoutError) {
+            setMessage("Save timed out. Check connection.");
+          } else {
+            setMessage(err instanceof Error ? err.message : "Failed to save");
+          }
         }
         return false;
+      } finally {
+        isLocalChangeRef.current = false;
+        pendingPublishRef.current = false;
       }
     },
     [isActive, localSessionId, operationTimeoutMs]
@@ -346,9 +377,10 @@ export function useNostrSync({
         });
 
         if (cloudData) {
-          const { history: cloudHistory, sessionId: remoteSid, createdAt } = cloudData;
-          if (createdAt > lastRemoteCreatedAtRef.current) {
-            lastRemoteCreatedAtRef.current = createdAt;
+          const { history: cloudHistory, sessionId: remoteSid, timestamp } = cloudData;
+          // Use payload timestamp (milliseconds) for ordering
+          if (timestamp > latestTimestampRef.current) {
+            latestTimestampRef.current = timestamp;
           } else if (followRemote) {
             return;
           }
@@ -420,8 +452,44 @@ export function useNostrSync({
     void performLoadRef.current?.(secret);
   }, [secret]);
 
+  // NostrPad-style event handler for subscription
+  const handleRemoteEvent = useCallback(
+    (payload: HistoryPayload) => {
+      // Skip if this is our own session
+      if (payload.sessionId && payload.sessionId === localSessionId) return;
+
+      // Skip if older than what we have (timestamp-based ordering)
+      if (payload.timestamp <= latestTimestampRef.current) return;
+
+      // Check grace period - ignore remote events during takeover grace
+      if (Date.now() < ignoreRemoteUntilRef.current) return;
+
+      latestTimestampRef.current = payload.timestamp;
+
+      // Check for session takeover
+      if (payload.sessionId && payload.sessionId !== localSessionId) {
+        if (sessionStatusRef.current !== "stale") {
+          setSessionStatus("stale");
+          setSessionNotice(
+            "Another session is active — viewing in read-only mode. Take over to edit."
+          );
+        }
+      }
+
+      // Don't overwrite local changes in progress
+      if (!isLocalChangeRef.current) {
+        skipNextDirtyRef.current = true;
+        onHistoryLoadedRef.current(payload.history);
+        if (sessionStatusRef.current === "stale") {
+          onRemoteSyncRef.current?.(payload.history);
+        }
+      }
+    },
+    [localSessionId, setSessionNotice, setSessionStatus]
+  );
+
   useEffect(() => {
-    if (!secret || sessionStatus !== "stale") return;
+    if (!secret) return;
     let cancelled = false;
 
     const setupSubscription = async () => {
@@ -430,12 +498,9 @@ export function useNostrSync({
       const cleanup = subscribeToHistoryDetailed(
         keys.publicKey,
         keys.privateKey,
-        (data) => {
+        (payload) => {
           if (cancelled) return;
-          if (data.sessionId && data.sessionId === localSessionId) return;
-          if (data.createdAt <= lastRemoteCreatedAtRef.current) return;
-          lastRemoteCreatedAtRef.current = data.createdAt;
-          mergeAndNotify(data.history, false, true);
+          handleRemoteEvent(payload);
         }
       );
       return cleanup;
@@ -443,7 +508,7 @@ export function useNostrSync({
 
     const cleanupPromise = setupSubscription().catch((err) => {
       if (!cancelled) {
-        console.error("Failed to setup slave sync subscription:", err);
+        console.error("Failed to setup sync subscription:", err);
       }
       return null;
     });
@@ -458,28 +523,9 @@ export function useNostrSync({
           // Ignore subscription setup failures on teardown.
         });
     };
-  }, [secret, sessionStatus, mergeAndNotify, localSessionId]);
+  }, [secret, handleRemoteEvent]);
 
-  useEffect(() => {
-    if (!secret || sessionStatus !== "stale") return;
-    let cancelled = false;
-    const intervalId = window.setInterval(() => {
-      if (cancelled) return;
-      if (followRemoteInFlightRef.current) return;
-      followRemoteInFlightRef.current = true;
-      void performLoadRef
-        .current?.(secret, false, { followRemote: true, silent: true })
-        .finally(() => {
-          followRemoteInFlightRef.current = false;
-        });
-    }, 5000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(intervalId);
-    };
-  }, [secret, sessionStatus]);
-
+  // Auto-save when history changes (debounced)
   useEffect(() => {
     if (!secret || sessionStatus !== "active" || !dirtyRef.current) return;
 
@@ -495,6 +541,23 @@ export function useNostrSync({
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     };
   }, [history, secret, sessionStatus, performSave, debounceSaveMs]);
+
+  // Frequent position updates during active playback (for live sync to slaves)
+  useEffect(() => {
+    if (!secret || sessionStatus !== "active") return;
+    if (!isPlayingRef) return;
+
+    const intervalId = window.setInterval(() => {
+      if (isPlayingRef.current && !pendingPublishRef.current) {
+        isLocalChangeRef.current = true;
+        void performSave(secret, historyRef.current, { silent: true });
+      }
+    }, positionSaveIntervalMs);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [secret, sessionStatus, isPlayingRef, positionSaveIntervalMs, performSave]);
 
   return {
     status: secret ? status : "idle",

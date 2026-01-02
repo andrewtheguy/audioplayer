@@ -1,6 +1,6 @@
 import { finalizeEvent } from "nostr-tools/pure";
 import { SimplePool } from "nostr-tools/pool";
-import type { HistoryEntry } from "./history";
+import type { HistoryEntry, HistoryPayload } from "./history";
 import { encryptHistory, decryptHistory } from "./nostr-crypto";
 
 export const RELAYS = [
@@ -61,7 +61,8 @@ export async function saveHistoryToNostr(
   signal?: AbortSignal
 ): Promise<void> {
   throwIfAborted(signal);
-  const { ciphertext, ephemeralPubKey } = encryptHistory(history, userPublicKey);
+  // sessionId and timestamp are now embedded in the encrypted payload
+  const { ciphertext, ephemeralPubKey } = encryptHistory(history, userPublicKey, sessionId);
 
   const payload = JSON.stringify({
     v: 1,
@@ -73,9 +74,6 @@ export async function saveHistoryToNostr(
     ["d", D_TAG],
     ["client", "audioplayer"],
   ];
-  if (sessionId) {
-    tags.push(["session", sessionId]);
-  }
 
   const event = finalizeEvent(
     {
@@ -115,12 +113,13 @@ export async function saveHistoryToNostr(
 
 /**
  * Load and decrypt history from Nostr relays
+ * Returns HistoryPayload with embedded timestamp and sessionId
  */
 export async function loadHistoryFromNostr(
   userPrivateKey: Uint8Array,
   userPublicKey: string,
   signal?: AbortSignal
-): Promise<{ history: HistoryEntry[]; sessionId: string | null; createdAt: number } | null> {
+): Promise<HistoryPayload | null> {
   throwIfAborted(signal);
   const events = await pool.querySync(
     RELAYS,
@@ -140,10 +139,6 @@ export async function loadHistoryFromNostr(
   // Get most recent event
   const latest = events.sort((a, b) => b.created_at - a.created_at)[0];
 
-  // Extract session ID from tags
-  const sessionTag = latest.tags.find((t) => t[0] === "session");
-  const sessionId = sessionTag ? sessionTag[1] : null;
-
   // Parse and validate payload structure
   let payload: unknown;
   try {
@@ -158,13 +153,12 @@ export async function loadHistoryFromNostr(
     );
   }
 
-  // Decrypt with validated payload
-  const history = decryptHistory(
+  // Decrypt returns HistoryPayload with timestamp and sessionId
+  return decryptHistory(
     payload.ciphertext,
     payload.ephemeralPubKey,
     userPrivateKey
   );
-  return { history, sessionId, createdAt: latest.created_at };
 }
 
 /**
@@ -218,10 +212,14 @@ export function subscribeToHistory(
   }
 }
 
+/**
+ * Subscribe to history updates with full payload decryption
+ * Returns HistoryPayload with embedded timestamp and sessionId
+ */
 export function subscribeToHistoryDetailed(
   userPublicKey: string,
   userPrivateKey: Uint8Array,
-  onEvent: (data: { history: HistoryEntry[]; sessionId: string | null; createdAt: number }) => void
+  onEvent: (payload: HistoryPayload) => void
 ): () => void {
   const canSetOnError = (
     value: unknown
@@ -255,18 +253,14 @@ export function subscribeToHistoryDetailed(
               );
             }
 
-            const history = decryptHistory(
+            // decryptHistory returns HistoryPayload with timestamp and sessionId
+            const historyPayload = decryptHistory(
               payload.ciphertext,
               payload.ephemeralPubKey,
               userPrivateKey
             );
 
-            const sessionTag = event.tags.find((t) => t[0] === "session");
-            onEvent({
-              history,
-              sessionId: sessionTag ? sessionTag[1] : null,
-              createdAt: event.created_at,
-            });
+            onEvent(historyPayload);
           } catch (err) {
             console.error("Nostr history event handler failed:", err);
           }

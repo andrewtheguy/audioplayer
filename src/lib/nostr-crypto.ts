@@ -1,7 +1,7 @@
 import { getPublicKey, generateSecretKey } from "nostr-tools/pure";
 import { encrypt, decrypt, getConversationKey } from "nostr-tools/nip44";
 import { decode as decodeNip19 } from "nostr-tools/nip19";
-import type { HistoryEntry } from "./history";
+import type { HistoryEntry, HistoryPayload } from "./history";
 
 export interface NostrKeys {
   privateKey: Uint8Array;
@@ -91,7 +91,8 @@ export async function deriveNostrKeys(
  */
 export function encryptHistory(
   data: HistoryEntry[],
-  recipientPublicKey: string
+  recipientPublicKey: string,
+  sessionId?: string
 ): { ciphertext: string; ephemeralPubKey: string } {
   if (
     typeof recipientPublicKey !== "string" ||
@@ -104,8 +105,14 @@ export function encryptHistory(
   const ephemeralPrivKey = generateSecretKey();
   const ephemeralPubKey = getPublicKey(ephemeralPrivKey);
 
+  const payload: HistoryPayload = {
+    history: data,
+    timestamp: Date.now(),
+    sessionId,
+  };
+
   const conversationKey = getConversationKey(ephemeralPrivKey, recipientPublicKey);
-  const plaintext = JSON.stringify(data);
+  const plaintext = JSON.stringify(payload);
   const ciphertext = encrypt(plaintext, conversationKey);
   ephemeralPrivKey.fill(0);
 
@@ -161,6 +168,31 @@ function decodeValidNpub(value: string): string | null {
 }
 
 /**
+ * Validate that a parsed value is a valid HistoryPayload
+ */
+function validateHistoryPayload(data: unknown): HistoryPayload {
+  if (typeof data !== "object" || data === null) {
+    throw new Error("Payload is not an object");
+  }
+
+  const payload = data as Record<string, unknown>;
+
+  if (typeof payload.timestamp !== "number") {
+    throw new Error("Payload missing timestamp");
+  }
+
+  if (payload.sessionId !== undefined && typeof payload.sessionId !== "string") {
+    throw new Error("Payload sessionId must be a string");
+  }
+
+  return {
+    history: validateHistoryArray(payload.history),
+    timestamp: payload.timestamp,
+    sessionId: payload.sessionId as string | undefined,
+  };
+}
+
+/**
  * Decrypt history data using NIP-44
  * Validates decryption, JSON parsing, and data structure
  */
@@ -168,7 +200,7 @@ export function decryptHistory(
   ciphertext: string,
   senderPublicKey: string,
   recipientPrivateKey: Uint8Array
-): HistoryEntry[] {
+): HistoryPayload {
   if (typeof senderPublicKey !== "string" || senderPublicKey.length === 0) {
     throw new Error("Invalid senderPublicKey: empty");
   }
@@ -202,7 +234,7 @@ export function decryptHistory(
   }
 
   try {
-    return validateHistoryArray(parsed);
+    return validateHistoryPayload(parsed);
   } catch (err) {
     throw new Error(
       `Invalid history data structure: ${err instanceof Error ? err.message : "Unknown error"}`

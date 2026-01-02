@@ -88,6 +88,7 @@ function AudioPlayerInner({
   const currentUrlRef = useRef<string>("");
   const currentTitleRef = useRef<string | undefined>(undefined);
   const isLiveStreamRef = useRef<boolean>(false);
+  const isPlayingRef = useRef<boolean>(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
@@ -127,6 +128,10 @@ function AudioPlayerInner({
   useEffect(() => {
     isLiveStreamRef.current = isLiveStream;
   }, [isLiveStream]);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
 
   useEffect(() => {
     gainRef.current = gain;
@@ -1284,6 +1289,7 @@ function AudioPlayerInner({
           }}
           onRemoteSync={handleRemoteSync}
           sessionId={sessionId}
+          isPlayingRef={isPlayingRef}
         />
       </div>
     </div>
