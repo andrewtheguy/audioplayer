@@ -15,6 +15,12 @@ const D_TAG = "audioplayer-history";
 
 const pool = new SimplePool();
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+}
+
 /**
  * Close all relay connections to avoid resource leaks.
  * Call this during application shutdown or cleanup.
@@ -51,8 +57,10 @@ export async function saveHistoryToNostr(
   history: HistoryEntry[],
   userPrivateKey: Uint8Array,
   userPublicKey: string,
-  sessionId?: string
+  sessionId?: string,
+  signal?: AbortSignal
 ): Promise<void> {
+  throwIfAborted(signal);
   const { ciphertext, ephemeralPubKey } = encryptHistory(history, userPublicKey);
 
   const payload = JSON.stringify({
@@ -80,7 +88,9 @@ export async function saveHistoryToNostr(
   );
 
   try {
+    throwIfAborted(signal);
     await Promise.any(pool.publish(RELAYS, event));
+    throwIfAborted(signal);
   } catch (err) {
     // Promise.any throws AggregateError when all promises reject
     if (err instanceof AggregateError) {
@@ -100,8 +110,10 @@ export async function saveHistoryToNostr(
  */
 export async function loadHistoryFromNostr(
   userPrivateKey: Uint8Array,
-  userPublicKey: string
+  userPublicKey: string,
+  signal?: AbortSignal
 ): Promise<{ history: HistoryEntry[]; sessionId: string | null } | null> {
+  throwIfAborted(signal);
   const events = await pool.querySync(
     RELAYS,
     {
@@ -111,6 +123,7 @@ export async function loadHistoryFromNostr(
       limit: 1,
     }
   );
+  throwIfAborted(signal);
 
   if (events.length === 0) {
     return null;

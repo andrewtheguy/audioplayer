@@ -163,6 +163,8 @@ export function useNostrSync({
       options?: { allowStale?: boolean }
     ) => {
       if (!currentSecret || !isActive()) return false;
+      const signal = abortRef.current?.signal;
+      if (signal?.aborted) return false;
 
       const shouldBlockSave = () =>
         sessionStatusRef.current === "stale" && !options?.allowStale;
@@ -174,7 +176,7 @@ export function useNostrSync({
 
       try {
         const keys = await withTimeout(
-          deriveNostrKeys(currentSecret),
+          deriveNostrKeys(currentSecret, signal),
           operationTimeoutMs
         );
         if (!isActive()) return false;
@@ -182,14 +184,14 @@ export function useNostrSync({
           console.warn("Session became stale before save. Ignoring.");
           return false;
         }
-        if (!isActive()) return false;
         setStatus("saving");
         await withTimeout(
           saveHistoryToNostr(
             historyToSave,
             keys.privateKey,
             keys.publicKey,
-            localSessionId
+            localSessionId,
+            signal
           ),
           operationTimeoutMs
         );
@@ -285,6 +287,8 @@ export function useNostrSync({
   const performLoad = useCallback(
     async (currentSecret: string, isTakeOver = false) => {
       if (!currentSecret || !isActive()) return;
+      const signal = abortRef.current?.signal;
+      if (signal?.aborted) return;
 
       setStatus("loading");
       setMessage("Syncing...");
@@ -294,12 +298,12 @@ export function useNostrSync({
 
       try {
         const keys = await withTimeout(
-          deriveNostrKeys(currentSecret),
+          deriveNostrKeys(currentSecret, signal),
           operationTimeoutMs
         );
         if (!isActive()) return;
         const cloudData = await withTimeout(
-          loadHistoryFromNostr(keys.privateKey, keys.publicKey),
+          loadHistoryFromNostr(keys.privateKey, keys.publicKey, signal),
           operationTimeoutMs
         );
         if (!isActive()) return;
@@ -373,10 +377,7 @@ export function useNostrSync({
 
   useEffect(() => {
     if (!secret) return;
-    const timeoutId = setTimeout(() => {
-      void performLoadRef.current?.(secret);
-    }, 0);
-    return () => clearTimeout(timeoutId);
+    void performLoadRef.current?.(secret);
   }, [secret]);
 
   useEffect(() => {

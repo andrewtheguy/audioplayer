@@ -29,10 +29,20 @@ export function generateSecret(): string {
  * Uses a fixed salt to prevent rainbow table attacks if secrets are leaked,
  * though the secrets themselves are high-entropy random strings.
  */
-export async function deriveNostrKeys(secret: string): Promise<NostrKeys> {
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+}
+
+export async function deriveNostrKeys(
+  secret: string,
+  signal?: AbortSignal
+): Promise<NostrKeys> {
   if (!secret) {
     throw new Error("Secret cannot be empty");
   }
+  throwIfAborted(signal);
 
   const encoder = new TextEncoder();
   const secretBytes = encoder.encode(secret);
@@ -45,6 +55,7 @@ export async function deriveNostrKeys(secret: string): Promise<NostrKeys> {
     false,
     ["deriveBits"]
   );
+  throwIfAborted(signal);
   const derivedBits = await crypto.subtle.deriveBits(
     {
       name: "HKDF",
@@ -55,6 +66,7 @@ export async function deriveNostrKeys(secret: string): Promise<NostrKeys> {
     keyMaterial,
     256
   );
+  throwIfAborted(signal);
   const privateKey = new Uint8Array(derivedBits);
 
   // Validate the derived key is a valid secp256k1 private key
