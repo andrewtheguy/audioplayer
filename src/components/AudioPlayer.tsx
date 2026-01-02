@@ -519,6 +519,13 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   }, [isPlaying, loadFromHistory]);
 
   const showLiveCta = isLiveStream && !isPlaying;
+  const handleSessionStatusChange = useCallback((status: "unclaimed" | "active" | "stale" | "unknown") => {
+    if (status !== "stale") return;
+    const audio = audioRef.current;
+    if (audio && !audio.paused) {
+      audio.pause();
+    }
+  }, []);
 
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6">
@@ -762,6 +769,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
             setHistory(merged);
             saveHistory(merged);
           }}
+          onSessionStatusChange={handleSessionStatusChange}
         />
       </div>
     </div>

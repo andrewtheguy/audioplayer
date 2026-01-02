@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 interface NostrSyncPanelProps {
   history: HistoryEntry[];
   onHistoryLoaded: (merged: HistoryEntry[]) => void;
+  onSessionStatusChange?: (status: SessionStatus) => void;
 }
 
 type SyncStatus = "idle" | "saving" | "loading" | "success" | "error";
@@ -98,6 +99,7 @@ function getSecretFromHash(): string {
 export function NostrSyncPanel({
   history,
   onHistoryLoaded,
+  onSessionStatusChange,
 }: NostrSyncPanelProps) {
   const [secret, setSecret] = useState(getSecretFromHash());
   const [status, setStatus] = useState<SyncStatus>("idle");
@@ -124,6 +126,7 @@ export function NostrSyncPanel({
 
   useEffect(() => {
     sessionStatusRef.current = sessionStatus;
+    onSessionStatusChange?.(sessionStatus);
   }, [sessionStatus]);
 
   const performSave = useCallback(async (
