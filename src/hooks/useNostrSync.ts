@@ -4,6 +4,7 @@ import {
   loadHistoryFromNostr,
   mergeHistory,
   saveHistoryToNostr,
+  subscribeToHistory,
 } from "@/lib/nostr-sync";
 import type { HistoryEntry } from "@/lib/history";
 import type { SessionStatus } from "@/hooks/useNostrSession";
@@ -41,7 +42,11 @@ interface UseNostrSyncResult {
     historyToSave: HistoryEntry[],
     options?: { allowStale?: boolean }
   ) => Promise<boolean>;
-  performLoad: (currentSecret: string, isTakeOver?: boolean) => Promise<void>;
+  performLoad: (
+    currentSecret: string,
+    isTakeOver?: boolean,
+    options?: { followRemote?: boolean; silent?: boolean }
+  ) => Promise<void>;
 }
 
 const DEFAULT_DEBOUNCE_SAVE_MS = 5000;
@@ -117,7 +122,11 @@ export function useNostrSync({
   const mountedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const performLoadRef = useRef<
-    ((currentSecret: string, isTakeOver?: boolean) => Promise<void>) | null
+    ((
+      currentSecret: string,
+      isTakeOver?: boolean,
+      options?: { followRemote?: boolean; silent?: boolean }
+    ) => Promise<void>) | null
   >(null);
 
   const isActive = useCallback(
@@ -237,14 +246,14 @@ export function useNostrSync({
   }, [isActive, setSessionNotice, setSessionStatus]);
 
   const mergeAndNotify = useCallback(
-    (cloudHistory: HistoryEntry[], isTakeOver: boolean) => {
+    (cloudHistory: HistoryEntry[], isTakeOver: boolean, followRemote: boolean) => {
       const result = mergeHistory(historyRef.current, cloudHistory, {
-        preferRemote: isTakeOver,
-        preferRemoteOrder: isTakeOver,
+        preferRemote: isTakeOver || followRemote,
+        preferRemoteOrder: isTakeOver || followRemote,
       });
       skipNextDirtyRef.current = true;
       onHistoryLoadedRef.current(result.merged);
-      if (isTakeOver) {
+      if (isTakeOver || followRemote) {
         onTakeOverRef.current?.(cloudHistory);
       }
       return result;
@@ -285,13 +294,21 @@ export function useNostrSync({
   );
 
   const performLoad = useCallback(
-    async (currentSecret: string, isTakeOver = false) => {
+    async (
+      currentSecret: string,
+      isTakeOver = false,
+      options?: { followRemote?: boolean; silent?: boolean }
+    ) => {
       if (!currentSecret || !isActive()) return;
       const signal = abortRef.current?.signal;
       if (signal?.aborted) return;
 
-      setStatus("loading");
-      setMessage("Syncing...");
+      const followRemote = options?.followRemote === true;
+      const silent = options?.silent === true;
+      if (!silent) {
+        setStatus("loading");
+        setMessage("Syncing...");
+      }
       if (isTakeOver) {
         startTakeoverGrace();
       }
@@ -328,7 +345,7 @@ export function useNostrSync({
             handleStaleSession();
           }
 
-          const result = mergeAndNotify(cloudHistory, isTakeOver);
+          const result = mergeAndNotify(cloudHistory, isTakeOver, followRemote);
           if (!isActive()) return;
           updateSessionStateAndMaybeSave(
             currentSecret,
@@ -339,20 +356,26 @@ export function useNostrSync({
           );
         } else {
           if (!isActive()) return;
-          setStatus("success");
+          if (!silent) {
+            setStatus("success");
+          }
           setSessionStatus("active");
           clearSessionNotice();
-          setMessage("Session started (new)");
+          if (!silent) {
+            setMessage("Session started (new)");
+          }
           dirtyRef.current = false;
           void performSave(currentSecret, historyRef.current, { allowStale: true });
         }
       } catch (err) {
         if (!isActive()) return;
-        setStatus("error");
-        if (err instanceof TimeoutError) {
-          setMessage("Load timed out. Check your connection and try again.");
-        } else {
-          setMessage(err instanceof Error ? err.message : "Failed to load");
+        if (!silent) {
+          setStatus("error");
+          if (err instanceof TimeoutError) {
+            setMessage("Load timed out. Check your connection and try again.");
+          } else {
+            setMessage(err instanceof Error ? err.message : "Failed to load");
+          }
         }
       }
     },
@@ -379,6 +402,42 @@ export function useNostrSync({
     if (!secret) return;
     void performLoadRef.current?.(secret);
   }, [secret]);
+
+  useEffect(() => {
+    if (!secret || sessionStatus !== "stale") return;
+    let cancelled = false;
+
+    const setupSubscription = async () => {
+      const keys = await deriveNostrKeys(secret);
+      if (cancelled) return null;
+      const cleanup = subscribeToHistory(keys.publicKey, () => {
+        if (cancelled) return;
+        void performLoadRef.current?.(secret, false, {
+          followRemote: true,
+          silent: true,
+        });
+      });
+      return cleanup;
+    };
+
+    const cleanupPromise = setupSubscription().catch((err) => {
+      if (!cancelled) {
+        console.error("Failed to setup slave sync subscription:", err);
+      }
+      return null;
+    });
+
+    return () => {
+      cancelled = true;
+      void cleanupPromise
+        .then((cleanup) => {
+          if (cleanup) cleanup();
+        })
+        .catch(() => {
+          // Ignore subscription setup failures on teardown.
+        });
+    };
+  }, [secret, sessionStatus]);
 
   useEffect(() => {
     if (!secret || sessionStatus !== "active" || !dirtyRef.current) return;
