@@ -58,6 +58,8 @@ function formatTimestamp(date: Date): string {
 
 const OPERATION_TIMEOUT_MS = 30000; // 30 seconds
 const DEBOUNCE_SAVE_MS = 5000; // 5 seconds auto-save debounce
+const TAKEOVER_GRACE_MS = 15000; // 15 seconds grace to let takeover settle
+const SESSION_POLL_MS = 6000; // 6 seconds polling for session changes
 
 class TimeoutError extends Error {
   constructor(message = "Operation timed out") {
@@ -121,6 +123,7 @@ export function NostrSyncPanel({
   const onTakeOverRef = useRef(onTakeOver);
   const sessionStatusRef = useRef(sessionStatus);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ignoreRemoteUntilRef = useRef<number>(0);
 
   useEffect(() => {
     historyRef.current = history;
@@ -183,6 +186,9 @@ export function NostrSyncPanel({
 
     setStatus("loading");
     setMessage("Syncing...");
+    if (isTakeOver) {
+      ignoreRemoteUntilRef.current = Date.now() + TAKEOVER_GRACE_MS;
+    }
 
     try {
       const keys = await withTimeout(
@@ -272,6 +278,7 @@ export function NostrSyncPanel({
         cleanup = subscribeToHistory(keys.publicKey, (remoteSid) => {
             // If we see a session ID that is NOT ours, we are stale.
             if (remoteSid && remoteSid !== localSessionId) {
+                if (Date.now() < ignoreRemoteUntilRef.current) return;
                 setSessionStatus((prev) => {
                     if (prev !== 'stale') {
                          setMessage("Session taken over by another device.");
@@ -292,6 +299,33 @@ export function NostrSyncPanel({
         if (cleanup) cleanup();
     };
   }, [secret, localSessionId]);
+
+  // Fallback polling to detect session changes if relay subscription misses events
+  useEffect(() => {
+    if (!secret || sessionStatus !== "active") return;
+
+    let cancelled = false;
+    const checkSession = async () => {
+      try {
+        const keys = await deriveNostrKeys(secret);
+        const cloudData = await loadHistoryFromNostr(keys.privateKey, keys.publicKey);
+        if (cancelled || !cloudData?.sessionId) return;
+        if (cloudData.sessionId !== localSessionId) {
+          if (Date.now() < ignoreRemoteUntilRef.current) return;
+          setSessionStatus("stale");
+          setMessage("Session taken over by another device.");
+        }
+      } catch {
+        // Ignore polling errors to avoid noisy UI updates
+      }
+    };
+
+    const intervalId = window.setInterval(checkSession, SESSION_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [secret, sessionStatus, localSessionId]);
 
   // Sync state with URL hash and auto-load on change
   useEffect(() => {
