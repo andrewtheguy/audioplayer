@@ -1,10 +1,10 @@
-# HLS Audio Player
+# Audio Player
 
-A web-based audio player with HLS streaming support, built with React, TypeScript, and Tailwind CSS.
+A web-based audio player supporting standard audio formats and HLS streaming, built with React, TypeScript, and Tailwind CSS.
 
 ## Features
 
-- **HLS Streaming Support** - Play HLS streams (.m3u8) using hls.js
+- **Audio Playback** - Play standard audio URLs (MP3, etc.) and HLS streams (.m3u8)
 - **Playback Controls** - Play/pause, seek forward (+30s), seek backward (-15s)
 - **Progress Bar** - Visual progress with seekable slider, displays time in HH:MM:SS format
 - **Volume Control** - Adjustable volume slider
@@ -65,13 +65,13 @@ npm run preview
 
 ## Usage
 
-1. Enter an HLS stream URL (.m3u8) in the input field
+1. Enter an audio URL (MP3, HLS .m3u8, etc.) in the input field
 2. Click "Load" or press Enter to load the stream
 3. Use the play button to start playback
 4. Use -15s and +30s buttons to seek
 5. Adjust volume with the volume slider
 6. Click on history items to reload and resume from saved position
 
-## Example HLS Streams
+## Example Audio URLs
 
-You can test with any public HLS audio stream URL ending in `.m3u8`.
+You can test with any public audio URL (MP3, WAV, etc.) or HLS stream (.m3u8).

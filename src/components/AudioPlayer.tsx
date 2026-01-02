@@ -894,13 +894,13 @@ function AudioPlayerInner({
             />
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium">HLS Stream URL</label>
+            <label className="text-sm font-medium">Audio URL</label>
             <div className="flex gap-2">
               <Input
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder="Enter HLS URL (.m3u8)"
+                placeholder="Enter audio URL"
                 onKeyDown={(e) => e.key === "Enter" && !isSessionStale && loadStream()}
                 disabled={isSessionStale}
               />
