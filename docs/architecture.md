@@ -105,9 +105,49 @@ User Action → AudioPlayer → saveCurrentPosition() → localStorage
 
 **Sync ordering**: Events are ordered by embedded millisecond timestamps in the encrypted payload (`HistoryPayload.timestamp`), not by Nostr event `created_at` (which has only second precision). This ensures reliable ordering even with rapid updates.
 
+### Session State Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         SESSION STATES                               │
+├─────────────────────────────────────────────────────────────────────┤
+│  unknown    │  No secret in URL, local-only mode                    │
+│  idle       │  Secret present, viewing read-only, not claimed       │
+│  active     │  Session claimed, can edit and sync                   │
+│  stale      │  Another device took over, read-only until reclaim    │
+└─────────────────────────────────────────────────────────────────────┘
+
+Page Load Flow:
+───────────────
+  No secret in URL → "unknown" (local only, no sync)
+
+  Secret in URL → "idle" (read-only)
+       ↓
+  performInitialLoad() fetches history
+       ↓
+  User clicks "Start Session"
+       ↓
+  startSession() claims session → "active"
+
+
+State Transitions:
+──────────────────
+  idle ──[Start Session]──▶ active
+  active ──[Remote takeover]──▶ stale
+  stale ──[Take Over Session]──▶ active
+  idle ──[Remote event]──▶ idle (stays idle, just updates history)
+```
+
 ### Session Takeover Flow
 
 ```
+From Idle (first time claiming):
+1. User clicks "Start Session"
+2. startSession() calls performLoad(secret, isTakeOver=true)
+3. Grace period starts (15s)
+4. Saves with new sessionId → "active"
+
+From Stale (reclaiming):
 1. Device B clicks "Take Over Session"
 2. NostrSyncPanel.performLoad(secret, isTakeOver=true)
 3. Fetches and decrypts cloud history
