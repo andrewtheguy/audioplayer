@@ -836,7 +836,9 @@ function AudioPlayerInner({
         gainNodeRef.current = null;
       }
       if (audioContextRef.current) {
-        void audioContextRef.current.close();
+        void audioContextRef.current.close().catch((err) => {
+          console.error("Failed to close AudioContext:", err);
+        });
         audioContextRef.current = null;
       }
       if (audio) {
