@@ -126,11 +126,15 @@ export function NostrSyncPanel({
     sessionStatusRef.current = sessionStatus;
   }, [sessionStatus]);
 
-  const performSave = useCallback(async (currentSecret: string, historyToSave: HistoryEntry[]) => {
+  const performSave = useCallback(async (
+      currentSecret: string,
+      historyToSave: HistoryEntry[],
+      options?: { allowStale?: boolean }
+    ) => {
       if (!currentSecret) return;
       
       // Don't save if we are stale!
-      if (sessionStatusRef.current === 'stale') {
+      if (sessionStatusRef.current === 'stale' && !options?.allowStale) {
           console.warn("Attempted to save while stale. Ignoring.");
           return;
       }
@@ -222,7 +226,7 @@ export function NostrSyncPanel({
              if (isTakeOver || !remoteSid) {
                   // Wait a tick for merge to settle? No, we have merged result.
                   // Save merged history immediately to claim session
-                  performSave(currentSecret, result.merged);
+                  performSave(currentSecret, result.merged, { allowStale: isTakeOver });
              }
         }
 
@@ -232,7 +236,7 @@ export function NostrSyncPanel({
         setSessionStatus("active");
         setMessage("Session started (new)");
         // Save initial empty/current state to claim
-        performSave(currentSecret, historyRef.current);
+        performSave(currentSecret, historyRef.current, { allowStale: true });
       }
     } catch (err) {
       setStatus("error");
