@@ -157,9 +157,9 @@ export function subscribeToHistory(
   const sub = pool.subscribeMany(
     RELAYS,
     {
-        kinds: [KIND_HISTORY],
-        authors: [userPublicKey],
-        "#d": [D_TAG],
+      kinds: [KIND_HISTORY],
+      authors: [userPublicKey],
+      "#d": [D_TAG],
     },
     {
       onevent: (event) => {
