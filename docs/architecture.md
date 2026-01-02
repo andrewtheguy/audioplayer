@@ -122,10 +122,21 @@ Nostr protocol integration for cloud sync.
 **Event structure (NIP-78):**
 - Kind: 30078 (application-specific replaceable)
 - d-tag: "audioplayer-history"
-- session tag: unique session ID for multi-device coordination
-  - ✅ **Current:** UUIDv4 generated via `crypto.randomUUID()` per client session.
-  - ⚠️ **Intended (Roadmap):** Namespaced, high-entropy IDs (UUIDv4 is acceptable) with publish-time collision checks: if an existing event contains the same session tag, regenerate and republish. Optional per-user namespace prefix to avoid cross-URL collisions.
-  - ⚠️ **Stale-session detection/cleanup (Roadmap):** include a `last_seen`/heartbeat timestamp in event tags or content. Emit a heartbeat every 30s; mark sessions inactive after 2 minutes without heartbeat. A periodic reconciler (every 30–60s) should mark stale sessions and prefer active ones; takeover should require explicit user confirmation if a different active session is detected. All intervals/timeouts should be configurable in one place.
+
+**Session tag strategy**
+- ✅ **Current:** UUIDv4 generated via `crypto.randomUUID()` per client session.
+
+**Roadmap improvements**
+- Namespaced, high-entropy IDs (UUIDv4 is acceptable).
+- Publish-time collision checks: if an existing event contains the same session tag, regenerate and republish.
+- Optional per-URL or per-user namespace prefix to avoid cross-URL collisions.
+
+**Stale-session detection (roadmap)**
+- Emit a heartbeat every 30s.
+- Mark sessions inactive after 2 minutes without heartbeat.
+- Periodic reconciler every 30–60s that prefers active sessions.
+- Takeover requires explicit user confirmation if a different active session is detected.
+- All intervals/timeouts configurable in one place.
 
 **Key functions:**
 - `saveHistoryToNostr()`: Encrypts and publishes history
@@ -194,6 +205,34 @@ This section documents the current behavior and intended resilience strategy for
 - No durable retry queue for failed sync operations (errors must be retried manually or via auto‑save once connectivity returns).
 - Relay failures can degrade cross‑device sync without local data loss.
 - Conflict resolution is session‑based; concurrent active sessions are resolved via takeover rather than per‑field reconciliation.
+
+## Performance & Scalability
+
+- HLS buffer management should favor conservative defaults to avoid large memory spikes on long sessions.
+- History is capped at 100 entries; adjust only with clear memory/UX tradeoffs.
+- Nostr relays may rate‑limit; prefer debounced writes and backoff (see retry queue roadmap).
+- Consider lightweight metrics (sync success rate, save latency, relay error counts, history size).
+
+## Configuration & Environment
+
+- Centralize configurable values (relay list, debounce/heartbeat/retry intervals, poll cadence, storage limits) in one module.
+- Document environment variables (if introduced) and default values.
+- Keep production vs dev relay lists distinct; avoid shipping private relays in public builds.
+- Ensure configuration changes are reflected in both runtime behavior and docs.
+
+## Error Taxonomy
+
+- **Network/Relay:** retry with backoff (roadmap), fail‑safe to local‑only, user‑visible status + logs.
+- **Crypto/Decryption:** surface a clear error and skip corrupted blobs; never block local usage.
+- **Storage:** handle `localStorage` quota/availability errors with a warning and graceful fallback.
+- **State/Concurrency:** avoid stale session writes; require explicit takeover for active conflicts.
+
+## Testing Strategy
+
+- **Unit:** merge rules, session status transitions, and key derivation/validation helpers.
+- **Integration:** mock Nostr relays, SubtleCrypto, and clipboard to exercise load/save flows.
+- **CI:** include lint + build; add fast tests for retry/backoff logic when implemented.
+- **E2E:** scenarios for takeover, stale sessions, relay loss/recovery, and cross‑device resume.
 
 ## Playback Position Sync
 
