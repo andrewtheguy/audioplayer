@@ -63,3 +63,15 @@ This document tracks planned improvements and known limitations for the audio pl
   - Optional local-only mode when relay access is blocked
   - Recommended guidance: use modern Chromium/Firefox/Safari; avoid private browsing for persistent history
 
+## Playlist Management
+
+### Separate Groups for Live Streams and VOD
+- **Status:** Not implemented
+- **Description:** Group history entries by content type (live streams vs VOD) for easier management
+- **Current behavior:** All history entries are displayed in a single flat list sorted by last played time, regardless of whether they are live streams or VOD content.
+- **Proposed:**
+  - Detect content type based on HLS manifest (live vs VOD) or URL patterns
+  - Display separate collapsible sections for "Live Streams" and "VOD Playlist"
+  - Allow bulk operations (clear, export) per group
+  - Persist content type classification in history entries for faster rendering
+
