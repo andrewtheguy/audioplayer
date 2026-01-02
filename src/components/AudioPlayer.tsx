@@ -826,6 +826,19 @@ function AudioPlayerInner({
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
+      // Clean up Web Audio API state so setupGainNode can run correctly after recovery
+      if (sourceNodeRef.current) {
+        sourceNodeRef.current.disconnect();
+        sourceNodeRef.current = null;
+      }
+      if (gainNodeRef.current) {
+        gainNodeRef.current.disconnect();
+        gainNodeRef.current = null;
+      }
+      if (audioContextRef.current) {
+        void audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
       if (audio) {
         audio.src = "";
         audio.load();

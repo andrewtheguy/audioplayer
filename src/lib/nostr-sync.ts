@@ -34,12 +34,17 @@ if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", closePool);
 }
 
+/** Validated payload structure from a Nostr event */
+interface ValidatedPayload {
+  v: number;
+  ephemeralPubKey: string;
+  ciphertext: string;
+}
+
 /**
  * Validate the encrypted payload structure from a Nostr event
  */
-function isValidPayload(
-  value: unknown
-): value is { v: number; ephemeralPubKey: string; ciphertext: string } {
+function isValidPayload(value: unknown): value is ValidatedPayload {
   if (typeof value !== "object" || value === null) return false;
   const obj = value as Record<string, unknown>;
   return (
@@ -47,6 +52,38 @@ function isValidPayload(
     typeof obj.ephemeralPubKey === "string" &&
     typeof obj.ciphertext === "string"
   );
+}
+
+/**
+ * Parse and validate event content JSON
+ * Throws with descriptive error messages for catch blocks
+ */
+function parseAndValidateEventContent(content: string): ValidatedPayload {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(content);
+  } catch {
+    throw new Error("Event content is not valid JSON. Data may be corrupted.");
+  }
+
+  if (!isValidPayload(payload)) {
+    throw new Error(
+      "Invalid payload structure: missing or invalid ephemeralPubKey/ciphertext fields"
+    );
+  }
+
+  return payload;
+}
+
+/**
+ * Type guard for checking if subscription supports onerror handler
+ */
+function canSetOnError(
+  value: unknown
+): value is { onerror?: (err: unknown) => void } {
+  if (!value || typeof value !== "object") return false;
+  const maybe = value as { onerror?: unknown };
+  return typeof maybe.onerror === "undefined" || typeof maybe.onerror === "function";
 }
 
 /**
@@ -139,19 +176,7 @@ export async function loadHistoryFromNostr(
   // Get most recent event
   const latest = events.sort((a, b) => b.created_at - a.created_at)[0];
 
-  // Parse and validate payload structure
-  let payload: unknown;
-  try {
-    payload = JSON.parse(latest.content);
-  } catch {
-    throw new Error("Event content is not valid JSON. Data may be corrupted.");
-  }
-
-  if (!isValidPayload(payload)) {
-    throw new Error(
-      "Invalid payload structure: missing or invalid ephemeralPubKey/ciphertext fields"
-    );
-  }
+  const payload = parseAndValidateEventContent(latest.content);
 
   // Decrypt returns HistoryPayload with timestamp and sessionId
   return decryptHistory(
@@ -169,14 +194,6 @@ export function subscribeToHistory(
   userPublicKey: string,
   onEvent: (sessionId: string | null) => void
 ): () => void {
-  const canSetOnError = (
-    value: unknown
-  ): value is { onerror?: (err: unknown) => void } => {
-    if (!value || typeof value !== "object") return false;
-    const maybe = value as { onerror?: unknown };
-    return typeof maybe.onerror === "undefined" || typeof maybe.onerror === "function";
-  };
-
   try {
     const sub = pool.subscribeMany(
       RELAYS,
@@ -221,14 +238,6 @@ export function subscribeToHistoryDetailed(
   userPrivateKey: Uint8Array,
   onEvent: (payload: HistoryPayload) => void
 ): () => void {
-  const canSetOnError = (
-    value: unknown
-  ): value is { onerror?: (err: unknown) => void } => {
-    if (!value || typeof value !== "object") return false;
-    const maybe = value as { onerror?: unknown };
-    return typeof maybe.onerror === "undefined" || typeof maybe.onerror === "function";
-  };
-
   try {
     const sub = pool.subscribeMany(
       RELAYS,
@@ -240,18 +249,7 @@ export function subscribeToHistoryDetailed(
       {
         onevent: (event) => {
           try {
-            let payload: unknown;
-            try {
-              payload = JSON.parse(event.content);
-            } catch {
-              throw new Error("Event content is not valid JSON. Data may be corrupted.");
-            }
-
-            if (!isValidPayload(payload)) {
-              throw new Error(
-                "Invalid payload structure: missing or invalid ephemeralPubKey/ciphertext fields"
-              );
-            }
+            const payload = parseAndValidateEventContent(event.content);
 
             // decryptHistory returns HistoryPayload with timestamp and sessionId
             const historyPayload = decryptHistory(
