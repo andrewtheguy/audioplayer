@@ -167,7 +167,7 @@ export function useNostrSync({
 
   useEffect(() => {
     onRemoteSyncRef.current = onRemoteSync;
-  });
+  }, [onRemoteSync]);
 
   useEffect(() => {
     sessionStatusRef.current = sessionStatus;
@@ -461,10 +461,11 @@ export function useNostrSync({
       // Skip if older than what we have (timestamp-based ordering)
       if (payload.timestamp <= latestTimestampRef.current) return;
 
+      // Always update timestamp ref to track newest seen timestamp, even if skipped
+      latestTimestampRef.current = payload.timestamp;
+
       // Check grace period - ignore remote events during takeover grace
       if (Date.now() < ignoreRemoteUntilRef.current) return;
-
-      latestTimestampRef.current = payload.timestamp;
 
       // Check for session takeover
       if (payload.sessionId && payload.sessionId !== localSessionId) {
@@ -493,7 +494,10 @@ export function useNostrSync({
     let cancelled = false;
 
     const setupSubscription = async () => {
-      const keys = await deriveNostrKeys(secret);
+      const keys = await withTimeout(
+        deriveNostrKeys(secret),
+        operationTimeoutMs
+      );
       if (cancelled) return null;
       const cleanup = subscribeToHistoryDetailed(
         keys.publicKey,
@@ -523,7 +527,7 @@ export function useNostrSync({
           // Ignore subscription setup failures on teardown.
         });
     };
-  }, [secret, handleRemoteEvent]);
+  }, [secret, handleRemoteEvent, operationTimeoutMs]);
 
   // Auto-save when history changes (debounced)
   useEffect(() => {
