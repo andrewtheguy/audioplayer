@@ -89,6 +89,7 @@ function AudioPlayerInner({
   const pausedAtTimestampRef = useRef<number | null>(null);
   const pendingSeekTimerRef = useRef<number | null>(null);
   const pendingSeekAttemptsRef = useRef<number>(0);
+  const seekingToTargetRef = useRef<boolean>(false);
 
   const [url, setUrl] = useState(initialUrl);
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
@@ -235,6 +236,7 @@ function AudioPlayerInner({
     // Set pending seek position from history entry
     pendingSeekPositionRef.current = entry.position;
     pendingSeekAttemptsRef.current = 0;
+    seekingToTargetRef.current = false;
     if (pendingSeekTimerRef.current) {
       clearTimeout(pendingSeekTimerRef.current);
       pendingSeekTimerRef.current = null;
@@ -442,10 +444,12 @@ function AudioPlayerInner({
     if (!audio || pending === null) return;
     if (isLiveStreamRef.current) {
       pendingSeekPositionRef.current = null;
+      seekingToTargetRef.current = false;
       return;
     }
     if (!isFinite(pending) || pending < 0) {
       pendingSeekPositionRef.current = null;
+      seekingToTargetRef.current = false;
       return;
     }
     if (audio.seekable.length === 0) {
@@ -454,13 +458,44 @@ function AudioPlayerInner({
     }
     if (pendingSeekAttemptsRef.current >= 20) {
       pendingSeekPositionRef.current = null;
+      seekingToTargetRef.current = false;
+      return;
+    }
+
+    // Check if we're already at the target position (from a previous successful seek)
+    if (Math.abs(audio.currentTime - pending) <= 0.5) {
+      pendingSeekPositionRef.current = null;
+      seekingToTargetRef.current = false;
+      if (pendingSeekTimerRef.current) {
+        clearTimeout(pendingSeekTimerRef.current);
+        pendingSeekTimerRef.current = null;
+      }
+      return;
+    }
+
+    // If we're already seeking to target, wait for seeked event
+    if (seekingToTargetRef.current) {
       return;
     }
 
     pendingSeekAttemptsRef.current += 1;
+    seekingToTargetRef.current = true;
     audio.currentTime = pending;
     setCurrentTime(pending);
 
+    // Schedule a retry in case seeked event doesn't fire
+    schedulePendingSeekRetry();
+  };
+
+  const handleSeeked = () => {
+    const audio = audioRef.current;
+    const pending = pendingSeekPositionRef.current;
+
+    seekingToTargetRef.current = false;
+
+    if (!audio || pending === null) return;
+
+    // Check if we've reached the target position
     if (Math.abs(audio.currentTime - pending) <= 0.5) {
       pendingSeekPositionRef.current = null;
       if (pendingSeekTimerRef.current) {
@@ -468,6 +503,7 @@ function AudioPlayerInner({
         pendingSeekTimerRef.current = null;
       }
     } else {
+      // Seek didn't land at target, retry
       schedulePendingSeekRetry();
     }
   };
@@ -682,7 +718,7 @@ function AudioPlayerInner({
           applyPendingSeek();
         }}
         onPlaying={applyPendingSeek}
-        onSeeked={applyPendingSeek}
+        onSeeked={handleSeeked}
         onPause={handlePause}
         onEnded={() => setIsPlaying(false)}
         onError={() => setError("Audio playback error")}
