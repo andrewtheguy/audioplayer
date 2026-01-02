@@ -160,10 +160,12 @@ function AudioPlayerInner({
     setGainEnabled(!gainEnabled);
   }, [gainEnabled, setupGainNode]);
 
-  // Save current position to history (skip for live streams)
-  const saveCurrentPosition = useCallback(() => {
+  // Save history entry with an explicit position (skip for live streams)
+  const saveHistoryEntry = useCallback((position?: number) => {
     const audio = audioRef.current;
-    if (!audio || !currentUrlRef.current || !isFinite(audio.currentTime)) return;
+    if (!audio || !currentUrlRef.current) return;
+    const resolvedPosition = position ?? audio.currentTime;
+    if (!isFinite(resolvedPosition)) return;
     if (isLiveStreamRef.current) return; // Don't save position for live streams
 
     setHistory((prev) => {
@@ -172,7 +174,7 @@ function AudioPlayerInner({
       const entry: HistoryEntry = {
         url: currentUrlRef.current,
         lastPlayedAt: new Date().toISOString(),
-        position: audio.currentTime,
+        position: resolvedPosition,
         // Save gain if currently using gain control, otherwise preserve existing
         gain: gainRef.current !== 1 ? gainRef.current : existingEntry?.gain,
       };
@@ -192,7 +194,10 @@ function AudioPlayerInner({
   // Start/stop save interval based on playing state (skip for live streams)
   useEffect(() => {
     if (isPlaying && currentUrlRef.current && !isLiveStream) {
-      saveIntervalRef.current = window.setInterval(saveCurrentPosition, SAVE_INTERVAL_MS);
+      saveIntervalRef.current = window.setInterval(
+        saveHistoryEntry,
+        SAVE_INTERVAL_MS
+      );
     } else {
       if (saveIntervalRef.current) {
         clearInterval(saveIntervalRef.current);
@@ -205,12 +210,12 @@ function AudioPlayerInner({
         clearInterval(saveIntervalRef.current);
       }
     };
-  }, [isPlaying, isLiveStream, saveCurrentPosition]);
+  }, [isPlaying, isLiveStream, saveHistoryEntry]);
 
   // Save on unmount
   useEffect(() => {
     return () => {
-      saveCurrentPosition();
+      saveHistoryEntry();
       if (hlsRef.current) {
         hlsRef.current.destroy();
       }
@@ -219,13 +224,13 @@ function AudioPlayerInner({
         pendingSeekTimerRef.current = null;
       }
     };
-  }, [saveCurrentPosition]);
+  }, [saveHistoryEntry]);
 
   // Load directly from a history entry (with position)
   const loadFromHistory = useCallback((entry: HistoryEntry, options?: { forceReset?: boolean }) => {
     // Save current position before switching
     if (currentUrlRef.current && currentUrlRef.current !== entry.url) {
-      saveCurrentPosition();
+      saveHistoryEntry();
     }
 
     setError(null);
@@ -312,7 +317,7 @@ function AudioPlayerInner({
       audio.src = urlToLoad;
       onLoadSuccess();
     }
-  }, [saveCurrentPosition]);
+  }, [saveHistoryEntry]);
 
   useEffect(() => {
     if (!takeoverEntry) return;
@@ -333,7 +338,7 @@ function AudioPlayerInner({
 
     // Fresh load (no history entry)
     if (currentUrlRef.current && currentUrlRef.current !== urlToLoad) {
-      saveCurrentPosition();
+      saveHistoryEntry();
     }
 
     setError(null);
@@ -362,7 +367,7 @@ function AudioPlayerInner({
       setNowPlaying(urlToLoad);
       setUrl("");
       // Add to history immediately upon load success
-      saveCurrentPosition();
+      saveHistoryEntry(0);
     };
 
     if (urlToLoad.includes(".m3u8")) {
@@ -530,7 +535,7 @@ function AudioPlayerInner({
   const handlePause = () => {
     setIsPlaying(false);
     pausedAtTimestampRef.current = Date.now();
-    saveCurrentPosition();
+    saveHistoryEntry();
   };
 
   const handleSeek = (value: number[]) => {
