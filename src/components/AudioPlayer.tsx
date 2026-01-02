@@ -798,7 +798,7 @@ function AudioPlayerInner({
     // - invalid: bad checksum on load, nothing ever loaded (no resources to cleanup)
     // Note: idle and invalid can only be reached from states without active resources,
     // so cleanup is only needed for stale (the active→stale transition).
-    setIsViewOnly(status === "stale" || status === "idle" || status === "invalid");
+    setIsViewOnly(status === "stale" || status === "idle" || status === "invalid" || status === "unknown");
     setActualSessionStatus(status);
     if (status === "stale") {
       // Cleanup resources before transitioning to view-only mode

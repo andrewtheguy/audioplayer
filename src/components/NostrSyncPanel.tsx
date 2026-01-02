@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { generateSecret } from "@/lib/nostr-crypto";
 import { RELAYS } from "@/lib/nostr-sync";
-import type { HistoryEntry } from "@/lib/history";
+import { getSavedSessionSecret, type HistoryEntry } from "@/lib/history";
 import { cn } from "@/lib/utils";
 import {
   useNostrSession,
@@ -31,6 +31,7 @@ export function NostrSyncPanel({
 }: NostrSyncPanelProps) {
   const [showDetails, setShowDetails] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [savedSessionSecret] = useState(() => getSavedSessionSecret());
   const {
     secret,
     sessionStatus,
@@ -94,6 +95,12 @@ export function NostrSyncPanel({
     // The hashchange listener will pick this up and trigger state update + load
   };
 
+  const handleResumePreviousSession = () => {
+    if (savedSessionSecret) {
+      window.location.hash = savedSessionSecret;
+    }
+  };
+
   const handleCopyLink = async () => {
     if (!secret) return;
     const url = window.location.href;
@@ -154,18 +161,29 @@ export function NostrSyncPanel({
 
       {!secret ? (
         <div className="space-y-2">
-            <div className="text-xs text-muted-foreground">
-                Generate a secret link to sync your history across devices.
-            </div>
+          <div className="text-xs text-muted-foreground">
+            Viewing mode. Start or resume a session to enable editing.
+          </div>
           <Button
             size="sm"
-            variant="outline"
+            variant="default"
             onClick={handleGenerate}
             disabled={isLoading}
             className="w-full h-8 text-xs"
           >
-            Generate Secret Link
+            Start New Session
           </Button>
+          {savedSessionSecret && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleResumePreviousSession}
+              disabled={isLoading}
+              className="w-full h-8 text-xs"
+            >
+              Resume Previous Session
+            </Button>
+          )}
         </div>
       ) : sessionStatus === 'invalid' ? (
         <div className="space-y-2">

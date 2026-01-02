@@ -1,5 +1,6 @@
 export const STORAGE_KEY = "com.audioplayer.history.v1";
 export const HISTORY_TIMESTAMP_KEY = "com.audioplayer.history.timestamp";
+export const SESSION_SECRET_KEY = "com.audioplayer.session.secret";
 export const MAX_HISTORY_ENTRIES = 100;
 
 export interface HistoryEntry {
@@ -88,5 +89,22 @@ export function saveHistory(history: HistoryEntry[]): void {
   } catch (err) {
     // Storage full or unavailable
     console.warn("Failed to save history to localStorage:", err);
+  }
+}
+
+export function getSavedSessionSecret(): string | null {
+  try {
+    return localStorage.getItem(SESSION_SECRET_KEY) || null;
+  } catch (err) {
+    console.warn("Failed to get saved session secret:", err);
+    return null;
+  }
+}
+
+export function saveSessionSecret(secret: string): void {
+  try {
+    localStorage.setItem(SESSION_SECRET_KEY, secret);
+  } catch (err) {
+    console.warn("Failed to save session secret:", err);
   }
 }
