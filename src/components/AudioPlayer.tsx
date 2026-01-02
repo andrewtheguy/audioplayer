@@ -176,7 +176,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
 
 
   // Load directly from a history entry (with position)
-  const loadFromHistory = (entry: HistoryEntry) => {
+  const loadFromHistory = useCallback((entry: HistoryEntry) => {
     // Save current position before switching
     if (currentUrlRef.current && currentUrlRef.current !== entry.url) {
       saveCurrentPosition();
@@ -262,7 +262,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
       audio.src = urlToLoad;
       onLoadSuccess();
     }
-  };
+  }, [saveCurrentPosition]);
 
   // Load a URL - redirects to loadFromHistory if URL exists in history
   const loadUrl = (urlToLoad: string) => {
@@ -512,8 +512,7 @@ export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying]);
+  }, [isPlaying, loadFromHistory]);
 
   const showLiveCta = isLiveStream && !isPlaying;
 
