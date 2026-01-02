@@ -10,14 +10,6 @@ This document tracks planned improvements and known limitations for the audio pl
 - **Current behavior:** A device remains "active" indefinitely until another device explicitly takes over. Silent disconnections (e.g., browser closed) are not detected.
 - **Proposed:** Implement heartbeat mechanism where active sessions must publish periodic keep-alive signals. Sessions without updates for a configurable timeout are automatically marked as inactive.
 
-### Session ID Collision Prevention
-- **Status:** Not implemented
-- **Description:** Prevent session ID collisions across URLs
-- **Current behavior:** UUIDv4 generated via `crypto.randomUUID()` per client session
-- **Proposed improvements:**
-  - Publish-time collision checks: if an existing event contains the same session tag, regenerate and republish
-  - Optional per-URL or per-user namespace prefix to avoid cross-URL collisions
-
 ### Concurrent Offline Active Sessions
 - **Status:** Not implemented
 - **Description:** Handle the case where multiple devices go offline while both have active sessions, then come back online

@@ -200,8 +200,7 @@ Nostr protocol integration for cloud sync.
 - d-tag: "audioplayer-v3"
 
 **Session tag strategy**
-- UUIDv4 generated via `crypto.randomUUID()` per client session.
-- See [ROADMAP.md](./ROADMAP.md) for planned collision prevention improvements.
+- UUIDv4 generated via `crypto.randomUUID()` per client session (122 bits of randomness).
 
 **Stale-session detection**
 - Real-time subscription detects remote session activity via `HistoryPayload.sessionId`. When a remote event with a different sessionId arrives, the local session transitions to `stale` status only if currently `active`. Idle sessions stay idle (they haven't claimed the session yet).
