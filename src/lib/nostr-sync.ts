@@ -238,12 +238,26 @@ export function mergeHistory(
 
   const newFromCloud = cloud.filter((e) => !localByUrl.has(e.url));
   const duplicatesSkipped = cloud.length - newFromCloud.length;
+  const resolveTitle = (
+    primary: HistoryEntry,
+    secondary?: HistoryEntry
+  ): HistoryEntry => {
+    if (primary.title || !secondary?.title) {
+      return primary;
+    }
+    return { ...primary, title: secondary.title };
+  };
 
   if (preferRemoteOrder) {
     const mergedFromRemote = cloud.map((entry) => {
-      if (preferRemote) return entry;
+      if (preferRemote) {
+        return resolveTitle(entry, localByUrl.get(entry.url));
+      }
       const localEntry = localByUrl.get(entry.url);
-      return localEntry ?? entry;
+      if (localEntry) {
+        return resolveTitle(localEntry, entry);
+      }
+      return entry;
     });
 
     const newFromLocal = local.filter((e) => !cloudByUrl.has(e.url));
@@ -256,9 +270,11 @@ export function mergeHistory(
   }
 
   const merged = local.map((entry) => {
-    if (!preferRemote) return entry;
+    if (!preferRemote) {
+      return resolveTitle(entry, cloudByUrl.get(entry.url));
+    }
     const remote = cloudByUrl.get(entry.url);
-    return remote ?? entry;
+    return remote ? resolveTitle(remote, entry) : entry;
   });
 
   return {

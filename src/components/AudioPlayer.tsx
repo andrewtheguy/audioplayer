@@ -48,6 +48,11 @@ function truncateUrl(url: string, maxLength = 40): string {
   return url.slice(0, maxLength - 3) + "...";
 }
 
+function normalizeTitle(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
   const [resetKey, setResetKey] = useState(0);
   const [takeoverEntry, setTakeoverEntry] = useState<HistoryEntry | null>(null);
@@ -81,6 +86,7 @@ function AudioPlayerInner({
   const hlsRef = useRef<Hls | null>(null);
   const saveIntervalRef = useRef<number | null>(null);
   const currentUrlRef = useRef<string>("");
+  const currentTitleRef = useRef<string | undefined>(undefined);
   const isLiveStreamRef = useRef<boolean>(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
@@ -93,7 +99,9 @@ function AudioPlayerInner({
   const pendingSeekPositionRef = useRef<number | null>(null);
 
   const [url, setUrl] = useState(initialUrl);
-  const [nowPlaying, setNowPlaying] = useState<string | null>(null);
+  const [title, setTitle] = useState("");
+  const [nowPlayingUrl, setNowPlayingUrl] = useState<string | null>(null);
+  const [nowPlayingTitle, setNowPlayingTitle] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -107,6 +115,12 @@ function AudioPlayerInner({
   const [gainEnabled, setGainEnabled] = useState(false);
   const [gain, setGain] = useState(1); // 1 = 100%
   const [isSessionStale, setIsSessionStale] = useState(false);
+  const [editingUrl, setEditingUrl] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+  const [showLoadInputs, setShowLoadInputs] = useState(true);
+  const shouldShowLoadInputs = !nowPlayingUrl || showLoadInputs;
+  const [isEditingNowPlaying, setIsEditingNowPlaying] = useState(false);
+  const [nowPlayingTitleDraft, setNowPlayingTitleDraft] = useState("");
 
   // Keep refs in sync with state for use in callbacks
   useEffect(() => {
@@ -171,8 +185,10 @@ function AudioPlayerInner({
     setHistory((prev) => {
       const existingIndex = prev.findIndex((h) => h.url === currentUrlRef.current);
       const existingEntry = existingIndex >= 0 ? prev[existingIndex] : null;
+      const resolvedTitle = currentTitleRef.current ?? existingEntry?.title;
       const entry: HistoryEntry = {
         url: currentUrlRef.current,
+        title: resolvedTitle,
         lastPlayedAt: new Date().toISOString(),
         position: resolvedPosition,
         // Save gain if currently using gain control, otherwise preserve existing
@@ -274,12 +290,18 @@ function AudioPlayerInner({
     }
 
     currentUrlRef.current = urlToLoad;
+    currentTitleRef.current = entry.title;
     setUrl(urlToLoad);
 
     const onLoadSuccess = () => {
       setIsLoaded(true);
-      setNowPlaying(urlToLoad);
+      setNowPlayingUrl(urlToLoad);
+      setNowPlayingTitle(entry.title ?? null);
+      setIsEditingNowPlaying(false);
+      setNowPlayingTitleDraft("");
+      setTitle("");
       setUrl("");
+      setShowLoadInputs(false);
     };
 
     if (urlToLoad.includes(".m3u8")) {
@@ -337,9 +359,21 @@ function AudioPlayerInner({
 
   // Load a URL - redirects to loadFromHistory if URL exists in history
   const loadUrl = (urlToLoad: string) => {
+    const resolvedTitle = normalizeTitle(title);
     const historyEntry = history.find((h) => h.url === urlToLoad);
     if (historyEntry) {
-      loadFromHistory(historyEntry);
+      const updatedEntry =
+        resolvedTitle && resolvedTitle !== historyEntry.title
+          ? { ...historyEntry, title: resolvedTitle }
+          : historyEntry;
+      if (updatedEntry !== historyEntry) {
+        setHistory((prev) => {
+          const newHistory = [updatedEntry, ...prev.filter((h) => h.url !== updatedEntry.url)];
+          saveHistory(newHistory);
+          return newHistory;
+        });
+      }
+      loadFromHistory(updatedEntry);
       return;
     }
 
@@ -368,11 +402,17 @@ function AudioPlayerInner({
     }
 
     currentUrlRef.current = urlToLoad;
+    currentTitleRef.current = resolvedTitle;
 
     const onLoadSuccess = () => {
       setIsLoaded(true);
-      setNowPlaying(urlToLoad);
+      setNowPlayingUrl(urlToLoad);
+      setNowPlayingTitle(resolvedTitle ?? null);
+      setIsEditingNowPlaying(false);
+      setNowPlayingTitleDraft("");
+      setTitle("");
       setUrl("");
+      setShowLoadInputs(false);
       // Add to history immediately upon load success
       saveHistoryEntry(0);
     };
@@ -608,6 +648,63 @@ function AudioPlayerInner({
     loadFromHistory(entry);
   };
 
+  const startTitleEdit = (entry: HistoryEntry) => {
+    setEditingUrl(entry.url);
+    setEditingTitle(entry.title ?? "");
+  };
+
+  const cancelTitleEdit = () => {
+    setEditingUrl(null);
+    setEditingTitle("");
+  };
+
+  const saveTitleEdit = (entry: HistoryEntry, nextTitle: string) => {
+    const normalized = normalizeTitle(nextTitle);
+    setHistory((prev) => {
+      const newHistory = prev.map((item) =>
+        item.url === entry.url ? { ...item, title: normalized } : item
+      );
+      saveHistory(newHistory);
+      return newHistory;
+    });
+    if (nowPlayingUrl === entry.url) {
+      setNowPlayingTitle(normalized ?? null);
+    }
+    if (currentUrlRef.current === entry.url) {
+      currentTitleRef.current = normalized;
+    }
+    cancelTitleEdit();
+  };
+
+  const startNowPlayingTitleEdit = () => {
+    setIsEditingNowPlaying(true);
+    setNowPlayingTitleDraft(nowPlayingTitle ?? "");
+  };
+
+  const cancelNowPlayingTitleEdit = () => {
+    setIsEditingNowPlaying(false);
+    setNowPlayingTitleDraft("");
+  };
+
+  const saveNowPlayingTitleEdit = (nextTitle: string) => {
+    if (!nowPlayingUrl) return;
+    const normalized = normalizeTitle(nextTitle);
+    setHistory((prev) => {
+      const existing = prev.find((entry) => entry.url === nowPlayingUrl);
+      if (!existing) return prev;
+      const newHistory = prev.map((entry) =>
+        entry.url === nowPlayingUrl ? { ...entry, title: normalized } : entry
+      );
+      saveHistory(newHistory);
+      return newHistory;
+    });
+    setNowPlayingTitle(normalized ?? null);
+    if (currentUrlRef.current === nowPlayingUrl) {
+      currentTitleRef.current = normalized;
+    }
+    cancelNowPlayingTitleEdit();
+  };
+
   const copyToClipboard = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -694,20 +791,52 @@ function AudioPlayerInner({
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6">
       {/* URL Input */}
-      <div className="space-y-2">
-        <label className="text-sm font-medium">HLS Stream URL</label>
-        <div className="flex gap-2">
-          <Input
-            type="text"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="Enter HLS URL (.m3u8)"
-            onKeyDown={(e) => e.key === "Enter" && !isSessionStale && loadStream()}
-            disabled={isSessionStale}
-          />
-          <Button onClick={() => loadStream()} disabled={isSessionStale}>Load</Button>
+      {nowPlayingUrl && !shouldShowLoadInputs ? (
+        <Button
+          variant="outline"
+          onClick={() => setShowLoadInputs(true)}
+          disabled={isSessionStale}
+          className="w-full"
+        >
+          Load another
+        </Button>
+      ) : (
+        <div className="space-y-3">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Title (optional)</label>
+            <Input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Add a short title"
+              disabled={isSessionStale}
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">HLS Stream URL</label>
+            <div className="flex gap-2">
+              <Input
+                type="text"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="Enter HLS URL (.m3u8)"
+                onKeyDown={(e) => e.key === "Enter" && !isSessionStale && loadStream()}
+                disabled={isSessionStale}
+              />
+              <Button onClick={() => loadStream()} disabled={isSessionStale}>Load</Button>
+              {nowPlayingUrl && (
+                <Button
+                  variant="ghost"
+                  onClick={() => setShowLoadInputs(false)}
+                  disabled={isSessionStale}
+                >
+                  Cancel
+                </Button>
+              )}
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
       {isSessionStale ? (
         <div className="text-sm text-amber-700 bg-amber-500/10 border border-amber-500/20 p-3 rounded-md">
@@ -722,22 +851,81 @@ function AudioPlayerInner({
       )}
 
       {/* Now Playing */}
-      {nowPlaying && (
+      {nowPlayingUrl && (
         <div className="space-y-1">
           <label className="text-sm font-medium">Now Playing</label>
-          <div className="flex items-center gap-2">
-            <div className="text-sm text-muted-foreground truncate flex-1" title={nowPlaying}>
-              {nowPlaying}
+          <div className="space-y-1">
+            {isEditingNowPlaying ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  type="text"
+                  value={nowPlayingTitleDraft}
+                  onChange={(e) => setNowPlayingTitleDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      saveNowPlayingTitleEdit(nowPlayingTitleDraft);
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      cancelNowPlayingTitleEdit();
+                    }
+                  }}
+                  placeholder="Add a title"
+                  className="h-7 text-sm"
+                  autoFocus
+                  disabled={isSessionStale}
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => saveNowPlayingTitleEdit(nowPlayingTitleDraft)}
+                  disabled={isSessionStale}
+                  className="h-7 px-2 text-xs"
+                >
+                  Save
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={cancelNowPlayingTitleEdit}
+                  disabled={isSessionStale}
+                  className="h-7 px-2 text-xs text-muted-foreground"
+                >
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="text-sm font-medium truncate flex-1" title={nowPlayingTitle ?? ""}>
+                  {nowPlayingTitle ?? "Untitled"}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={startNowPlayingTitleEdit}
+                  disabled={isSessionStale}
+                  className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+                  title="Edit title"
+                >
+                  <EditIcon className="w-4 h-4" />
+                </Button>
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <div className="text-sm text-muted-foreground truncate flex-1" title={nowPlayingUrl}>
+                {nowPlayingUrl}
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => copyToClipboard(nowPlayingUrl)}
+                className={`h-6 w-6 p-0 shrink-0 ${copiedUrl === nowPlayingUrl ? "text-green-500" : "text-muted-foreground hover:text-foreground"}`}
+                title={copiedUrl === nowPlayingUrl ? "Copied!" : "Copy URL"}
+              >
+                {copiedUrl === nowPlayingUrl ? <CheckIcon className="w-4 h-4" /> : <CopyIcon className="w-4 h-4" />}
+              </Button>
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => copyToClipboard(nowPlaying)}
-              className={`h-6 w-6 p-0 shrink-0 ${copiedUrl === nowPlaying ? "text-green-500" : "text-muted-foreground hover:text-foreground"}`}
-              title={copiedUrl === nowPlaying ? "Copied!" : "Copy URL"}
-            >
-              {copiedUrl === nowPlaying ? <CheckIcon className="w-4 h-4" /> : <CopyIcon className="w-4 h-4" />}
-            </Button>
           </div>
         </div>
       )}
@@ -891,26 +1079,92 @@ function AudioPlayerInner({
             </button>
             {historyExpanded && (
               <>
-                <div className="max-h-48 overflow-y-auto space-y-1 border rounded-md p-2">
+                <div className="max-h-48 overflow-y-auto divide-y divide-border/60 border rounded-md">
                   {history.map((entry) => (
                     <div
                       key={entry.url}
-                      onClick={() => !isSessionStale && handleHistorySelect(entry)}
-                      className={`flex items-center justify-between p-2 rounded group ${
+                      onClick={() =>
+                        !isSessionStale && editingUrl !== entry.url && handleHistorySelect(entry)
+                      }
+                      className={`flex items-start justify-between px-3 py-2 group ${
                         isSessionStale
                           ? "cursor-not-allowed opacity-60"
-                          : "hover:bg-accent cursor-pointer"
+                          : "hover:bg-accent/60 cursor-pointer"
                       }`}
                     >
                       <div className="flex-1 min-w-0 mr-2">
-                        <div className="text-sm truncate" title={entry.url}>
-                          {truncateUrl(entry.url)}
-                        </div>
+                        {editingUrl === entry.url ? (
+                          <>
+                            <Input
+                              type="text"
+                              value={editingTitle}
+                              onChange={(e) => setEditingTitle(e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  saveTitleEdit(entry, editingTitle);
+                                }
+                                if (e.key === "Escape") {
+                                  e.preventDefault();
+                                  cancelTitleEdit();
+                                }
+                              }}
+                              onBlur={() => saveTitleEdit(entry, editingTitle)}
+                              placeholder="Add a title"
+                              className="h-7 text-sm"
+                              autoFocus
+                              disabled={isSessionStale}
+                            />
+                            <div className="text-xs text-muted-foreground truncate" title={entry.url}>
+                              {truncateUrl(entry.url)}
+                            </div>
+                          </>
+                        ) : entry.title ? (
+                          <>
+                            <div className="text-sm font-medium truncate" title={entry.title}>
+                              {entry.title}
+                            </div>
+                            <div className="text-xs text-muted-foreground truncate" title={entry.url}>
+                              {truncateUrl(entry.url)}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="text-sm truncate" title={entry.url}>
+                            {truncateUrl(entry.url)}
+                          </div>
+                        )}
                         <div className="text-xs text-muted-foreground">
                           {formatDate(entry.lastPlayedAt)} &middot; {formatTime(entry.position)}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
+                      <div
+                        className={`flex items-center gap-1 shrink-0 ${
+                          entry.title || editingUrl === entry.url ? "mt-0.5" : ""
+                        }`}
+                      >
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (editingUrl === entry.url) {
+                              saveTitleEdit(entry, editingTitle);
+                              return;
+                            }
+                            startTitleEdit(entry);
+                          }}
+                          onMouseDown={(e) => e.preventDefault()}
+                          disabled={isSessionStale}
+                          className={`h-6 w-6 p-0 ${editingUrl === entry.url ? "opacity-100 text-foreground" : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground"} disabled:cursor-not-allowed`}
+                          title={editingUrl === entry.url ? "Save title" : "Edit title"}
+                        >
+                          {editingUrl === entry.url ? (
+                            <CheckIcon className="w-4 h-4" />
+                          ) : (
+                            <EditIcon className="w-4 h-4" />
+                          )}
+                        </Button>
                         <Button
                           variant="ghost"
                           size="sm"
@@ -1004,6 +1258,25 @@ function CopyIcon({ className }: { className?: string }) {
     >
       <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
       <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function EditIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15.232 5.232a2.5 2.5 0 0 1 3.536 3.536L7 20.536 3 21l.464-4 11.768-11.768z"
+      />
     </svg>
   );
 }
