@@ -18,7 +18,7 @@ This is an audio player built with React and TypeScript that supports cross-devi
 
 The main player component with two layers:
 
-1. **AudioPlayer (outer)**: Manages component reset state and takeover entry
+1. **AudioPlayer (outer)**: Creates a stable sessionId and renders `AudioPlayerInner`
 2. **AudioPlayerInner**: Contains all playback logic
 
 Key features:
@@ -156,10 +156,9 @@ From Stale (reclaiming):
 2. NostrSyncPanel.performLoad(secret, isTakeOver=true)
 3. Fetches and decrypts cloud history
 4. Calls onTakeOver(cloudHistory)
-5. AudioPlayer.handleRequestReset(entry)
-6. Sets takeoverEntry + increments resetKey (remounts AudioPlayerInner)
-7. AudioPlayerInner loads entry with forceReset
-8. Pending seek mechanism restores playback position
+5. AudioPlayer.handleRemoteSync(cloudHistory)
+6. AudioPlayer loads entry with forceReset (no remount)
+7. Pending seek mechanism restores playback position
 ```
 
 ## Library Modules
