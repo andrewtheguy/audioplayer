@@ -219,6 +219,12 @@ function AudioPlayerInner({
       if (hlsRef.current) {
         hlsRef.current.destroy();
       }
+      if (audioContextRef.current) {
+        void audioContextRef.current.close().catch((err) => {
+          console.error("Failed to close AudioContext:", err);
+        });
+        audioContextRef.current = null;
+      }
       if (pendingSeekTimerRef.current) {
         clearTimeout(pendingSeekTimerRef.current);
         pendingSeekTimerRef.current = null;
@@ -448,6 +454,8 @@ function AudioPlayerInner({
   };
 
   const schedulePendingSeekRetry = () => {
+    // seekingToTargetRef tracks an in-flight programmatic seek (block duplicates);
+    // pendingSeekTimerRef schedules retries when seeked doesn't fire and is cleared on success/max attempts.
     if (pendingSeekTimerRef.current) return;
     pendingSeekTimerRef.current = window.setTimeout(() => {
       pendingSeekTimerRef.current = null;

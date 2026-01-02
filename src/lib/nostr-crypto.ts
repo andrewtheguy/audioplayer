@@ -173,19 +173,14 @@ export function decryptHistory(
   }
   const isHexSender = isValidHexPublicKey(senderPublicKey);
   const decodedNpub = !isHexSender ? decodeValidNpub(senderPublicKey) : null;
-  const isNpubSender = !isHexSender && !!decodedNpub;
+  const isNpubSender = !isHexSender && decodedNpub !== null;
   if (!isHexSender && !isNpubSender) {
     throw new Error("Invalid senderPublicKey: expected 64-char hex or npub");
   }
 
   let senderHex = senderPublicKey;
   if (!isHexSender) {
-    if (!decodedNpub) {
-      throw new Error(
-        `Invalid senderPublicKey: npub decode produced invalid hex (input=${senderPublicKey}, decoded=${decodedNpub})`
-      );
-    }
-    senderHex = decodedNpub;
+    senderHex = decodedNpub!;
   }
 
   let plaintext: string;

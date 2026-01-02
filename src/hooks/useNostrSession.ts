@@ -50,6 +50,7 @@ export function useNostrSession({
   const ignoreRemoteUntilRef = useRef<number>(0);
   const keysRef = useRef<CachedKeys | null>(null);
   const prevStatusRef = useRef<SessionStatus>(sessionStatus);
+  const staleNoticeTimerRef = useRef<number | null>(null);
 
   const onSessionStatusChangeRef = useRef(onSessionStatusChange);
 
@@ -58,18 +59,32 @@ export function useNostrSession({
   }, [onSessionStatusChange]);
 
   useEffect(() => {
+    if (sessionStatus === "unknown") return;
     onSessionStatusChangeRef.current?.(sessionStatus);
   }, [sessionStatus]);
 
   useEffect(() => {
     if (prevStatusRef.current !== "stale" && sessionStatus === "stale") {
-      setSessionNotice("Session taken over by another device.");
+      if (staleNoticeTimerRef.current) {
+        clearTimeout(staleNoticeTimerRef.current);
+      }
+      staleNoticeTimerRef.current = window.setTimeout(() => {
+        setSessionNotice("Session taken over by another device.");
+        staleNoticeTimerRef.current = null;
+      }, 0);
     }
     prevStatusRef.current = sessionStatus;
+    return () => {
+      if (staleNoticeTimerRef.current) {
+        clearTimeout(staleNoticeTimerRef.current);
+        staleNoticeTimerRef.current = null;
+      }
+    };
   }, [sessionStatus]);
 
   // Sync secret with URL hash changes
   useEffect(() => {
+    if (typeof window === "undefined") return;
     const handleHashChange = () => {
       const newSecret = getSecretFromHash();
       setSecret(newSecret);
@@ -89,7 +104,7 @@ export function useNostrSession({
   useEffect(() => {
     let cancelled = false;
     keysRef.current = null;
-    if (!secret) return () => undefined;
+    if (!secret) return;
     void deriveNostrKeys(secret)
       .then((keys) => {
         if (!cancelled) {
@@ -114,7 +129,7 @@ export function useNostrSession({
 
   const clearSessionNotice = useCallback(() => {
     setSessionNotice(null);
-  }, [setSessionNotice]);
+  }, []);
 
   // Subscription for "Stale" detection
   useEffect(() => {
@@ -181,6 +196,7 @@ export function useNostrSession({
       }
     };
 
+    void checkSession();
     const intervalId = window.setInterval(checkSession, pollMs);
     return () => {
       cancelled = true;

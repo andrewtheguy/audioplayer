@@ -115,7 +115,8 @@ export function NostrSyncPanel({
               copyMessageTimerRef.current = null;
           }, 3000);
       }
-    } catch {
+    } catch (err) {
+      console.error("Failed to copy link:", err);
       setMessage("Failed to copy link");
     }
   };
