@@ -14,11 +14,11 @@ A web-based audio player supporting standard audio formats and HLS streaming, bu
   - Copy URL to clipboard
   - Delete individual entries or clear all
   - Collapsible history list
-- **Position Persistence** - Saves playback position every 5 seconds
+- **Position Persistence** - Saves playback position every 5 seconds while playing (non-live streams)
 - **Now Playing** - Displays currently loaded stream URL
 - **Cross-Device Sync** - Sync playback history via Nostr protocol
   - End-to-end encrypted history storage
-  - Conflict resolution for concurrent multi-device sessions (automatically resolves conflicting active sessions)
+  - Session ownership with explicit takeovers (active sessions become stale when another device claims the session)
   - Auto-save with debouncing
 
 ## Security Note

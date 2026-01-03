@@ -6,7 +6,7 @@ This is an audio player built with React and TypeScript that supports cross-devi
 
 ## Tech Stack
 
-- **Frontend**: React 18, TypeScript, Vite
+- **Frontend**: React 19, TypeScript, Vite
 - **Styling**: Tailwind CSS, shadcn/ui components
 - **HLS Playback**: hls.js
 - **Sync Protocol**: Nostr (nostr-tools)
@@ -27,7 +27,7 @@ Key features:
 - Playback position tracking and restoration
 - Pending seek mechanism with retry logic for reliable position sync
 - Web Audio API gain control for volume boost beyond 100%
-- History management with auto-save every 5 seconds
+- History management with auto-save every 5 seconds during playback (non-live streams)
 
 ### NostrSyncPanel (`components/NostrSyncPanel.tsx`)
 
@@ -93,7 +93,7 @@ User Action → AudioPlayer → saveCurrentPosition() → localStorage
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         SESSION STATES                               │
 ├─────────────────────────────────────────────────────────────────────┤
-│  unknown    │  No secret in URL, local-only mode                    │
+│  unknown    │  No secret in URL, view-only (controls disabled)      │
 │  invalid    │  Secret has bad checksum, likely typo in URL          │
 │  idle       │  Secret present, viewing read-only, not claimed       │
 │  active     │  Session claimed, can edit and sync                   │
@@ -102,7 +102,7 @@ User Action → AudioPlayer → saveCurrentPosition() → localStorage
 
 Page Load Flow:
 ───────────────
-  No secret in URL → "unknown" (local only, no sync)
+  No secret in URL → "unknown" (view-only, no sync)
 
   Secret in URL with bad checksum → "invalid" (error shown, no sync)
 
@@ -165,11 +165,12 @@ From Stale (reclaiming):
 
 ### history.ts
 
-History types and payload validation.
+History types and local storage helpers.
 
 ```typescript
 interface HistoryEntry {
   url: string;          // Stream URL
+  title?: string;       // Optional title
   lastPlayedAt: string; // ISO timestamp
   position: number;     // Playback position in seconds
   gain?: number;        // Optional volume boost level
@@ -184,7 +185,7 @@ interface HistoryPayload {
 
 - `getHistory()`: Retrieves validated history from localStorage
 - `saveHistory()`: Persists history with timestamp for cross-tab sync
-- `validateHistoryPayload()`: Validates and normalizes payload from Nostr events
+- `validateHistoryPayload()` lives in `nostr-crypto.ts` (payload validation after decryption)
 - Max 100 entries (trimmed on save)
 
 ### nostr-sync.ts
@@ -192,7 +193,11 @@ interface HistoryPayload {
 Nostr protocol integration for cloud sync.
 
 **Relays used:**
-...
+- wss://nos.lol
+- wss://relay.nostr.band
+- wss://relay.nostr.net
+- wss://relay.primal.net
+- wss://relay.snort.social
 
 **Event structure (NIP-78):**
 - Kind: 30078 (application-specific replaceable)
@@ -205,7 +210,7 @@ Nostr protocol integration for cloud sync.
 - Real-time subscription detects remote session activity via `HistoryPayload.sessionId`. When a remote event with a different sessionId arrives, the local session transitions to `stale` status only if currently `active`. Idle sessions stay idle (they haven't claimed the session yet).
 - **Idle state:** Page load with secret starts in `idle` state. User must click "Start Session" to claim. This prevents race conditions and confusion about session ownership.
 - **Takeover grace period:** After taking over a session, remote events are ignored for a configurable grace period (`ignoreRemoteUntil`) to prevent immediate re-staling from delayed events.
-- **Live position sync:** Active sessions publish position updates every 5s during playback, allowing idle/stale devices to track playback position. Idle devices apply incoming position updates immediately to their UI and history (displayed position stays in sync) but do not start or change playback state. When transitioning from idle to active, the client seeks to the latest received position and begins playback from there (only the most recent position is retained, no queueing). Takeover grace period rules still apply to prevent immediate re-staling from delayed events.
+- **Live position sync:** Active sessions publish position updates every 5s during playback, allowing idle/stale devices to track playback position. Idle devices apply incoming position updates immediately to their UI and history (displayed position stays in sync) but do not start or change playback state. When transitioning from idle to active, the client seeks to the latest received position (only the most recent position is retained, no queueing). Takeover grace period rules still apply to prevent immediate re-staling from delayed events.
 
 **Key functions (nostr-sync.ts):**
 - `saveHistoryToNostr()`: Encrypts and publishes history with embedded timestamp and sessionId
@@ -276,7 +281,7 @@ This section documents the current behavior for sync and playback history. See [
 - Subscription setup failures are logged; relay drops can go unnoticed aside from console logs.
 
 **Failed encryption/decryption**
-- Decryption errors are surfaced as user-facing errors and logged; bad blobs are not merged.
+- Load/decryption errors surface as user-facing errors; subscription decryption errors are logged only. Bad blobs are not merged.
 
 **Merge conflict strategy (`mergeHistory`)**
 - Remote is source of truth for idle/stale sessions (list order, titles, gain, new URLs).
