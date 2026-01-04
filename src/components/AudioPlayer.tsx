@@ -159,7 +159,7 @@ function AudioPlayerInner({
 
     // Keep Safari/iOS output going through the Web Audio graph so gain changes apply.
     audio.setAttribute("playsinline", "true");
-    audio.muted = true;
+    audio.muted = false;
     audio.volume = 1;
 
     const ctx = new AudioContextClass();
@@ -192,6 +192,8 @@ function AudioPlayerInner({
   const handleGainToggle = useCallback(() => {
     if (!gainEnabled) {
       setupGainNode();
+    } else if (audioRef.current) {
+      audioRef.current.muted = false; // Ensure audio is audible when disabling boost
     }
     setGainEnabled(!gainEnabled);
   }, [gainEnabled, setupGainNode]);
