@@ -133,6 +133,7 @@ State Transitions:
 | `invalid` → `idle` | User clicks "Generate New Secret Link" | `generateSecret()` creates new valid secret, updates URL hash |
 | `idle` → `active` | User clicks "Start Session" | `startSession()` publishes with new sessionId, starts 15s grace period |
 | `active` → `stale` | Remote event with different sessionId | `subscribeToHistoryDetailed()` detects foreign sessionId in payload |
+| `active` → `stale` | Tab regains focus after takeover | Visibility handler fetches latest event, detects different sessionId |
 | `stale` → `active` | User clicks "Take Over Session" | `performLoad(secret, isTakeOver=true)` re-claims with new sessionId |
 | `idle` → `idle` | Remote event arrives | History merged via `onHistoryLoaded`, no session claim |
 | `stale` → `stale` | Remote event arrives | History merged via `onRemoteSync`, remains read-only |
@@ -141,6 +142,7 @@ State Transitions:
 - No heartbeat or timeout-based stale detection exists.
 - Active sessions publish position updates every 5s during playback, but silent disconnections (e.g., browser closed) are not detected.
 - A device remains "active" indefinitely until another device explicitly takes over.
+- **Visibility-based validation:** When a tab regains focus and the session was active, the hook fetches the latest Nostr event to verify no other device has taken over. If a newer event with a different sessionId is found, the session transitions to stale.
 - See [ROADMAP.md](./ROADMAP.md) for planned improvements.
 
 ### Session Takeover Flow
@@ -244,6 +246,7 @@ Nostr protocol integration for cloud sync.
 - `startSession()`: Claims session by calling performLoad with isTakeOver=true
 - `performLoad()`: Fetches and optionally claims session
 - `performSave()`: Encrypts and publishes current history
+- Visibility change handler: Validates active session on tab focus by fetching latest event and checking sessionId
 
 ### nostr-crypto.ts
 

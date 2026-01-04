@@ -625,6 +625,48 @@ export function useNostrSync({
     };
   }, [secret, handleRemoteEvent, operationTimeoutMs]);
 
+  // Check session validity when window regains focus (detect takeovers while tab was hidden)
+  useEffect(() => {
+    if (!secret) return;
+
+    const checkSessionValidity = async () => {
+      // Only check if session was active - idle/stale don't need validation
+      if (sessionStatusRef.current !== "active") return;
+
+      try {
+        const keys = await deriveNostrKeys(secret);
+        const cloudData = await loadHistoryFromNostr(keys.privateKey, keys.publicKey);
+
+        if (cloudData) {
+          const { sessionId: remoteSid, timestamp } = cloudData;
+
+          // Check if another device has taken over
+          if (remoteSid && remoteSid !== localSessionId) {
+            // Only transition to stale if remote timestamp is newer
+            if (timestamp > latestTimestampRef.current) {
+              latestTimestampRef.current = timestamp;
+              handleStaleSession();
+              console.log("[nostr-sync] Session invalidated on focus: another device took over");
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[nostr-sync] Failed to check session validity:", err);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void checkSessionValidity();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [secret, localSessionId, handleStaleSession]);
+
   // Auto-save when history changes (debounced)
   useEffect(() => {
     if (!secret || sessionStatus !== "active" || !dirtyRef.current) return;
