@@ -98,15 +98,23 @@ export function NostrSyncPanel({
       return;
     }
     let cancelled = false;
-    getStorageFingerprint(secret).then((fingerprint) => {
-      if (!cancelled) {
-        onFingerprintChange?.(fingerprint);
-      }
-    });
+    getStorageFingerprint(secret)
+      .then((fingerprint) => {
+        if (!cancelled) {
+          onFingerprintChange?.(fingerprint);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to compute storage fingerprint:", err);
+        if (!cancelled) {
+          onFingerprintChange?.(undefined);
+        }
+      });
     return () => {
       cancelled = true;
     };
-  }, [secret, onFingerprintChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [secret]);
 
   const handleGenerate = () => {
     const newSecret = generateSecret();
