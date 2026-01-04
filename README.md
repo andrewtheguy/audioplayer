@@ -5,7 +5,7 @@ A web-based audio player supporting standard audio formats and HLS streaming, bu
 ## Features
 
 - **Audio Playback** - Play standard audio URLs (MP3, etc.) and HLS streams (.m3u8)
-- **Playback Controls** - Play/pause, seek forward (+30s), seek backward (-15s)
+- **Playback Controls** - Play/pause, seek forward (+30s), seek backward (-15s), with iOS/Android lock screen integration via Media Session API
 - **Progress Bar** - Visual progress with seekable slider, displays time in HH:MM:SS format
 - **Volume Control** - Adjustable volume slider
 - **URL History** - Automatically saves played URLs to localStorage
