@@ -271,7 +271,7 @@ export function NostrSyncPanel({
       )}
 
       <div
-        className={cn("text-xs p-2 rounded-md transition-colors min-h-[2.5rem]",
+        className={cn("text-xs p-2 rounded-md transition-colors",
           !displayMessage && "invisible",
           displayMessage && "bg-muted/50",
           status === "error" && "text-destructive bg-destructive/5 border border-destructive/10",
