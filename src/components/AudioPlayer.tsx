@@ -165,12 +165,14 @@ function AudioPlayerInner({
     });
   }, []);
 
-  // Apply gain value: 1 if disabled, gain value if enabled
+  // Apply combined gain: volume * boost multiplier
+  // This ensures volume works on iOS (which ignores audio.volume)
   useEffect(() => {
     if (gainNodeRef.current) {
-      gainNodeRef.current.gain.value = gainEnabled ? gain : 1;
+      const boostMultiplier = gainEnabled ? gain : 1;
+      gainNodeRef.current.gain.value = volume * boostMultiplier;
     }
-  }, [gain, gainEnabled]);
+  }, [volume, gain, gainEnabled]);
 
   // Handle gain toggle
   const handleGainToggle = useCallback(() => {
@@ -634,13 +636,18 @@ function AudioPlayerInner({
     }
   };
 
-  const handleVolumeChange = (value: number[]) => {
+  const handleVolumeChange = useCallback((value: number[]) => {
     const audio = audioRef.current;
     if (audio) {
       audio.volume = value[0];
       setVolume(value[0]);
+      // Set up GainNode on first volume change for iOS support
+      // (iOS ignores audio.volume, so we need Web Audio API)
+      if (!sourceNodeRef.current) {
+        setupGainNode();
+      }
     }
-  };
+  }, [setupGainNode]);
 
   const jumpToLiveEdge = () => {
     if (!isLiveStream) return;
