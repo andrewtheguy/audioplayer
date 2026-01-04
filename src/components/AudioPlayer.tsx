@@ -148,7 +148,21 @@ function AudioPlayerInner({
     const audio = audioRef.current;
     if (!audio || sourceNodeRef.current) return; // Already setup
 
-    const ctx = new AudioContext();
+    const AudioContextClass =
+      (window.AudioContext ||
+        (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext);
+
+    if (!AudioContextClass) {
+      console.warn("Web Audio API not supported; boost unavailable");
+      return;
+    }
+
+    // Keep Safari/iOS output going through the Web Audio graph so gain changes apply.
+    audio.setAttribute("playsinline", "true");
+    audio.muted = true;
+    audio.volume = 1;
+
+    const ctx = new AudioContextClass();
     const source = ctx.createMediaElementSource(audio);
     const gainNode = ctx.createGain();
 
@@ -250,6 +264,9 @@ function AudioPlayerInner({
           console.error("Failed to close AudioContext:", err);
         });
         audioContextRef.current = null;
+      }
+      if (audioRef.current) {
+        audioRef.current.muted = false;
       }
       if (pendingSeekTimerRef.current) {
         clearTimeout(pendingSeekTimerRef.current);
@@ -864,6 +881,9 @@ function AudioPlayerInner({
       const audio = audioRef.current;
       if (audio && !audio.paused) {
         audio.pause();
+      }
+      if (audio) {
+        audio.muted = false; // Restore default output when tearing down boost chain
       }
       if (hlsRef.current) {
         hlsRef.current.destroy();
