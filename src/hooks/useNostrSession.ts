@@ -71,7 +71,8 @@ export function useNostrSession({
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>(initial.status);
   const [sessionNotice, setSessionNotice] = useState<string | null>(initial.notice);
   // Use restored sessionId from sessionStorage if available, otherwise generate new
-  const [localSessionId] = useState(
+  // This needs to be updatable when secret changes via hash navigation
+  const [localSessionId, setLocalSessionId] = useState(
     () => sessionId ?? initial.restoredSessionId ?? crypto.randomUUID()
   );
   const [ignoreRemoteUntil, setIgnoreRemoteUntil] = useState<number>(0);
@@ -127,6 +128,16 @@ export function useNostrSession({
         setSessionNotice("Invalid secret link. Check for typos in the URL.");
       } else {
         setSessionNotice(null);
+      }
+      // Update localSessionId when secret changes - restore from sessionStorage or generate new
+      if (newSecret && newStatus !== "invalid") {
+        const keyPrefix = getSecretKeyPrefix(newSecret);
+        const savedState = getSessionState(keyPrefix);
+        if (savedState) {
+          setLocalSessionId(savedState.sessionId);
+        } else {
+          setLocalSessionId(crypto.randomUUID());
+        }
       }
     };
 
