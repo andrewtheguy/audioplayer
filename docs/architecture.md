@@ -36,6 +36,7 @@ Orchestrates cross-device synchronization by connecting session management with 
 - **Session Management**: Coordinates with `useNostrSession` for active/stale status
 - **Sync Delegation**: Uses `useNostrSync` for all sync operations
 - **Takeover UI**: Provides controls for claiming sessions from other devices
+- **Storage Fingerprint**: Computes and propagates fingerprint from secret to parent for scoped localStorage access; displays fingerprint in `XXXX-XXXX-XXXX-XXXX` format in Details panel
 
 ### useNostrSession (`hooks/useNostrSession.ts`)
 
@@ -183,8 +184,26 @@ interface HistoryPayload {
 }
 ```
 
-- `getHistory()`: Retrieves validated history from localStorage
-- `saveHistory()`: Persists history with timestamp for cross-tab sync
+**Storage Keys (scoped by fingerprint):**
+
+History is isolated per session secret using a fingerprint-scoped storage key pattern:
+
+| Key Pattern | Description |
+|-------------|-------------|
+| `com.audioplayer.history.v1.{fingerprint}` | History entries array |
+| `com.audioplayer.history.timestamp.{fingerprint}` | Last update timestamp |
+| `com.audioplayer.session.last_used_secret` | Last used session secret (for "Resume Previous Session") |
+
+The fingerprint is a 16-character hex string (first 64 bits of SHA-256 hash of the secret). This prevents history conflicts when using multiple secrets on the same host.
+
+**Key functions:**
+
+- `getStorageFingerprint(secret)`: Generates 16-char hex fingerprint from secret (async, uses SubtleCrypto)
+- `getTimestampStorageKey(fingerprint?)`: Returns scoped timestamp key
+- `getHistory(fingerprint?)`: Retrieves validated history from localStorage (scoped by fingerprint)
+- `saveHistory(history, fingerprint?)`: Persists history with timestamp for cross-tab sync (scoped by fingerprint)
+- `getLastUsedSecret()`: Retrieves the last used session secret
+- `saveLastUsedSecret(secret)`: Persists secret for session resumption
 - `validateHistoryPayload()` lives in `nostr-crypto.ts` (payload validation after decryption)
 - Max 100 entries (trimmed on save)
 
@@ -358,5 +377,5 @@ No global state management library is used; state flows through props.
 Local cross-tab synchronization via visibility API:
 
 1. On pause, record `pausedAtTimestamp`
-2. On tab visibility, check `HISTORY_TIMESTAMP_KEY` in localStorage
-3. If history was updated after pause, reload latest entry
+2. On tab visibility, check fingerprint-scoped timestamp key in localStorage (via `getTimestampStorageKey(fingerprint)`)
+3. If history was updated after pause, reload latest entry from scoped storage

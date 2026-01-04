@@ -4,12 +4,12 @@ import type { HistoryEntry, HistoryPayload } from "./history";
 import { encryptHistory, decryptHistory } from "./nostr-crypto";
 
 export const RELAYS = [
-    'wss://nos.lol',
-    //'wss://relay.damus.io', [nostr] publish failed on wss://relay.damus.io: rate-limited: you are noting too much
-    'wss://relay.nostr.band',
-    'wss://relay.nostr.net',
-    'wss://relay.primal.net',
-    'wss://relay.snort.social',
+    "wss://nos.lol",
+    //"wss://relay.damus.io", // acceptable for index queries; not recommended for high-volume operations due to rate limiting
+    //"wss://relay.nostr.band",
+    "wss://relay.nostr.net",
+    "wss://relay.primal.net",
+    "wss://relay.snort.social",
 ];
 
 const KIND_HISTORY = 30078; // NIP-78: Application-specific replaceable data

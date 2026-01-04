@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { generateSecret } from "@/lib/nostr-crypto";
 import { RELAYS } from "@/lib/nostr-sync";
-import { getSavedSessionSecret, type HistoryEntry } from "@/lib/history";
+import { getLastUsedSecret, getStorageFingerprint, type HistoryEntry } from "@/lib/history";
 import { cn } from "@/lib/utils";
 import {
   useNostrSession,
@@ -16,6 +16,7 @@ interface NostrSyncPanelProps {
   onSessionStatusChange?: (status: SessionStatus) => void;
   onTakeOver?: (remoteHistory: HistoryEntry[]) => void;
   onRemoteSync?: (remoteHistory: HistoryEntry[]) => void;
+  onFingerprintChange?: (fingerprint: string | undefined) => void;
   sessionId?: string;
   isPlayingRef?: React.RefObject<boolean>; // For frequent position updates during playback
 }
@@ -26,12 +27,14 @@ export function NostrSyncPanel({
   onSessionStatusChange,
   onTakeOver,
   onRemoteSync,
+  onFingerprintChange,
   sessionId,
   isPlayingRef,
 }: NostrSyncPanelProps) {
   const [showDetails, setShowDetails] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [savedSessionSecret] = useState(() => getSavedSessionSecret());
+  const [savedSessionSecret] = useState(() => getLastUsedSecret());
+  const [displayFingerprint, setDisplayFingerprint] = useState<string | undefined>(undefined);
   const {
     secret,
     sessionStatus,
@@ -88,6 +91,36 @@ export function NostrSyncPanel({
       }
     };
   }, []);
+
+  // Compute storage fingerprint from secret and notify parent
+  useEffect(() => {
+    if (!secret) {
+      onFingerprintChange?.(undefined);
+      setDisplayFingerprint(undefined);
+      return;
+    }
+    let cancelled = false;
+    getStorageFingerprint(secret)
+      .then((fingerprint) => {
+        if (!cancelled) {
+          onFingerprintChange?.(fingerprint);
+          // Format with dashes for display: XXXX-XXXX-XXXX-XXXX
+          const formatted = fingerprint.toUpperCase().match(/.{1,4}/g)?.join("-");
+          setDisplayFingerprint(formatted);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to compute storage fingerprint:", err);
+        if (!cancelled) {
+          onFingerprintChange?.(undefined);
+          setDisplayFingerprint(undefined);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [secret]);
 
   const handleGenerate = () => {
     const newSecret = generateSecret();
@@ -280,9 +313,9 @@ export function NostrSyncPanel({
             </ul>
              {secret && (
                 <div className="pt-2">
-                    <div className="font-medium">Secret Fingerprint:</div>
+                    <div className="font-medium">Storage Fingerprint:</div>
                     <code className="font-mono text-[10px] block mt-0.5 select-all">
-                        {lastOperation?.fingerprint || "..."}
+                        {displayFingerprint || "..."}
                     </code>
                      <div className="font-medium mt-1">Session ID:</div>
                     <code className="font-mono text-[10px] block mt-0.5 select-all truncate">

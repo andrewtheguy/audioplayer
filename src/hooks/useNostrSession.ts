@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isValidSecret } from "@/lib/nostr-crypto";
-import { saveSessionSecret } from "@/lib/history";
+import { saveLastUsedSecret } from "@/lib/history";
 
 export type SessionStatus = "idle" | "active" | "stale" | "invalid" | "unknown";
 
@@ -76,7 +76,7 @@ export function useNostrSession({
   useEffect(() => {
     // Save secret to localStorage when session becomes active
     if (sessionStatus === "active" && secret) {
-      saveSessionSecret(secret);
+      saveLastUsedSecret(secret);
     }
   }, [sessionStatus, secret]);
 

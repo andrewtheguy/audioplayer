@@ -5,7 +5,7 @@ import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { NostrSyncPanel } from "./NostrSyncPanel";
 import {
-  HISTORY_TIMESTAMP_KEY,
+  getTimestampStorageKey,
   MAX_HISTORY_ENTRIES,
   getHistory,
   saveHistory,
@@ -81,8 +81,10 @@ function AudioPlayerInner({
   const pendingSeekAttemptsRef = useRef<number>(0);
   const seekingToTargetRef = useRef<boolean>(false);
   const pendingSeekPositionRef = useRef<number | null>(null);
+  const fingerprintRef = useRef<string | undefined>(undefined);
 
   const [url, setUrl] = useState(initialUrl);
+  const [storageFingerprint, setStorageFingerprint] = useState<string | undefined>(undefined);
   const [title, setTitle] = useState("");
   const [nowPlayingUrl, setNowPlayingUrl] = useState<string | null>(null);
   const [nowPlayingTitle, setNowPlayingTitle] = useState<string | null>(null);
@@ -92,7 +94,7 @@ function AudioPlayerInner({
   const [volume, setVolume] = useState(1);
   const [isLoaded, setIsLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<HistoryEntry[]>(() => getHistory());
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [isLiveStream, setIsLiveStream] = useState(false);
@@ -120,6 +122,20 @@ function AudioPlayerInner({
   useEffect(() => {
     gainRef.current = gain;
   }, [gain]);
+
+  useEffect(() => {
+    fingerprintRef.current = storageFingerprint;
+  }, [storageFingerprint]);
+
+  // Load history when fingerprint changes (scoped storage)
+  useEffect(() => {
+    setHistory(getHistory(storageFingerprint));
+  }, [storageFingerprint]);
+
+  // Handle fingerprint change from NostrSyncPanel
+  const handleFingerprintChange = useCallback((fingerprint: string | undefined) => {
+    setStorageFingerprint(fingerprint);
+  }, []);
 
   // Clear pause timestamp when playing starts
   useEffect(() => {
@@ -194,7 +210,7 @@ function AudioPlayerInner({
         newHistory = [entry, ...prev].slice(0, MAX_HISTORY_ENTRIES);
       }
 
-      saveHistory(newHistory);
+      saveHistory(newHistory, fingerprintRef.current);
       return newHistory;
     });
   }, []);
@@ -351,7 +367,7 @@ function AudioPlayerInner({
       if (updatedEntry !== historyEntry) {
         setHistory((prev) => {
           const newHistory = [updatedEntry, ...prev.filter((h) => h.url !== updatedEntry.url)];
-          saveHistory(newHistory);
+          saveHistory(newHistory, fingerprintRef.current);
           return newHistory;
         });
       }
@@ -655,7 +671,7 @@ function AudioPlayerInner({
         lastPlayedAt: new Date().toISOString(),
       };
       const newHistory = [updatedEntry, ...prev.filter((h) => h.url !== entry.url)];
-      saveHistory(newHistory);
+      saveHistory(newHistory, fingerprintRef.current);
       return newHistory;
     });
     loadFromHistory(entry);
@@ -677,7 +693,7 @@ function AudioPlayerInner({
       const newHistory = prev.map((item) =>
         item.url === entry.url ? { ...item, title: normalized } : item
       );
-      saveHistory(newHistory);
+      saveHistory(newHistory, fingerprintRef.current);
       return newHistory;
     });
     if (nowPlayingUrl === entry.url) {
@@ -708,7 +724,7 @@ function AudioPlayerInner({
       const newHistory = prev.map((entry) =>
         entry.url === nowPlayingUrl ? { ...entry, title: normalized } : entry
       );
-      saveHistory(newHistory);
+      saveHistory(newHistory, fingerprintRef.current);
       return newHistory;
     });
     setNowPlayingTitle(normalized ?? null);
@@ -746,7 +762,7 @@ function AudioPlayerInner({
     if (!confirm("Delete this entry from history?")) return;
     setHistory((prev) => {
       const newHistory = prev.filter((h) => h.url !== urlToDelete);
-      saveHistory(newHistory);
+      saveHistory(newHistory, fingerprintRef.current);
       return newHistory;
     });
   };
@@ -754,7 +770,7 @@ function AudioPlayerInner({
   const handleClearHistory = () => {
     if (!confirm("Clear all history? This cannot be undone.")) return;
     setHistory([]);
-    saveHistory([]);
+    saveHistory([], fingerprintRef.current);
   };
 
   // Cross-tab sync: reload history when tab becomes visible if it was updated elsewhere
@@ -765,15 +781,16 @@ function AudioPlayerInner({
         const pausedAt = pausedAtTimestampRef.current;
         if (pausedAt === null) return;
 
-        // Get the localStorage history timestamp
-        const storedTimestamp = localStorage.getItem(HISTORY_TIMESTAMP_KEY);
+        // Get the localStorage history timestamp (scoped by fingerprint)
+        const timestampKey = getTimestampStorageKey(fingerprintRef.current);
+        const storedTimestamp = localStorage.getItem(timestampKey);
         if (!storedTimestamp) return;
 
         const historyUpdatedAt = parseInt(storedTimestamp, 10);
 
         // If history was updated after we paused, reload it
         if (historyUpdatedAt > pausedAt) {
-          const freshHistory = getHistory();
+          const freshHistory = getHistory(fingerprintRef.current);
           setHistory(freshHistory);
 
           // Load the most recent entry if available (paused state)
@@ -1293,13 +1310,14 @@ function AudioPlayerInner({
           history={history}
           onHistoryLoaded={(merged) => {
             setHistory(merged);
-            saveHistory(merged);
+            saveHistory(merged, fingerprintRef.current);
           }}
           onSessionStatusChange={handleSessionStatusChange}
           onTakeOver={(remoteHistory) => {
             handleRemoteSync(remoteHistory);
           }}
           onRemoteSync={handleRemoteSync}
+          onFingerprintChange={handleFingerprintChange}
           sessionId={sessionId}
           isPlayingRef={isPlayingRef}
         />
