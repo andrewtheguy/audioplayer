@@ -807,6 +807,44 @@ function AudioPlayerInner({
     };
   }, [isPlaying, loadFromHistory]);
 
+  // Media Session API for iOS/Android lock screen controls
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+
+    const session = navigator.mediaSession;
+
+    // Set action handlers with custom seek offsets (-15s back, +30s forward)
+    session.setActionHandler("play", () => {
+      audioRef.current?.play();
+    });
+    session.setActionHandler("pause", () => {
+      audioRef.current?.pause();
+    });
+    session.setActionHandler("seekbackward", () => {
+      seekRelative(-15);
+    });
+    session.setActionHandler("seekforward", () => {
+      seekRelative(30);
+    });
+
+    return () => {
+      session.setActionHandler("play", null);
+      session.setActionHandler("pause", null);
+      session.setActionHandler("seekbackward", null);
+      session.setActionHandler("seekforward", null);
+    };
+  }, []);
+
+  // Update Media Session metadata when now playing changes
+  useEffect(() => {
+    if (!("mediaSession" in navigator) || !nowPlayingUrl) return;
+
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: nowPlayingTitle || nowPlayingUrl,
+      artist: "Audio Player",
+    });
+  }, [nowPlayingUrl, nowPlayingTitle]);
+
   const showLiveCta = isLiveStream && !isPlaying;
   const handleSessionStatusChange = useCallback((status: "idle" | "active" | "stale" | "invalid" | "unknown") => {
     // View-only states: disable controls and unmount audio element
