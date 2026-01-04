@@ -7,6 +7,7 @@ import {
   subscribeToHistoryDetailed,
 } from "@/lib/nostr-sync";
 import type { HistoryEntry, HistoryPayload } from "@/lib/history";
+import { getSessionState, saveSessionState, getSecretKeyPrefix } from "@/lib/history";
 import type { SessionStatus } from "@/hooks/useNostrSession";
 
 type SyncStatus = "idle" | "saving" | "loading" | "success" | "error";
@@ -142,7 +143,14 @@ export function useNostrSync({
   >(null);
 
   // NostrPad-style refs for reliable syncing
-  const latestTimestampRef = useRef<number>(0); // Milliseconds from payload
+  // Restore latestTimestamp from sessionStorage if available
+  const [restoredTimestamp] = useState(() => {
+    if (!secret) return 0;
+    const keyPrefix = getSecretKeyPrefix(secret);
+    const savedState = getSessionState(keyPrefix);
+    return savedState?.lastPublishedTimestamp ?? 0;
+  });
+  const latestTimestampRef = useRef<number>(restoredTimestamp);
   const isLocalChangeRef = useRef<boolean>(false); // Protect local changes during sync
   const pendingPublishRef = useRef<boolean>(false); // Prevent duplicate publishes
   const ignoreRemoteUntilRef = useRef<number>(ignoreRemoteUntil);
@@ -238,7 +246,15 @@ export function useNostrSync({
         if (!isActive()) return false;
 
         // Update our timestamp ref to the time we just published
-        latestTimestampRef.current = Date.now();
+        const publishTime = Date.now();
+        latestTimestampRef.current = publishTime;
+
+        // Persist session state to sessionStorage for resume detection
+        const keyPrefix = getSecretKeyPrefix(currentSecret);
+        saveSessionState(keyPrefix, {
+          sessionId: localSessionId,
+          lastPublishedTimestamp: publishTime,
+        });
 
         const fingerprint = await getSecretFingerprint(currentSecret);
         if (!isActive()) return false;
