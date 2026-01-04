@@ -1,7 +1,30 @@
 export const STORAGE_KEY = "com.audioplayer.history.v1";
 export const HISTORY_TIMESTAMP_KEY = "com.audioplayer.history.timestamp";
-export const SESSION_SECRET_KEY = "com.audioplayer.session.secret";
+export const LAST_USED_SECRET_KEY = "com.audioplayer.session.last_used_secret";
 export const MAX_HISTORY_ENTRIES = 100;
+
+/**
+ * Generate a storage-key-safe fingerprint from a secret.
+ * Returns 16 hex characters (first 64 bits of SHA-256 hash).
+ */
+export async function getStorageFingerprint(secret: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(secret);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray
+    .slice(0, 8)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function getHistoryStorageKey(fingerprint?: string): string {
+  return fingerprint ? `${STORAGE_KEY}.${fingerprint}` : STORAGE_KEY;
+}
+
+export function getTimestampStorageKey(fingerprint?: string): string {
+  return fingerprint ? `${HISTORY_TIMESTAMP_KEY}.${fingerprint}` : HISTORY_TIMESTAMP_KEY;
+}
 
 export interface HistoryEntry {
   url: string;
@@ -64,9 +87,10 @@ function trimHistory(history: HistoryEntry[]): HistoryEntry[] {
   return history.slice(0, MAX_HISTORY_ENTRIES);
 }
 
-export function getHistory(): HistoryEntry[] {
+export function getHistory(fingerprint?: string): HistoryEntry[] {
   try {
-    const data = localStorage.getItem(STORAGE_KEY);
+    const key = getHistoryStorageKey(fingerprint);
+    const data = localStorage.getItem(key);
     if (!data) return [];
 
     const parsed = JSON.parse(data);
@@ -80,31 +104,33 @@ export function getHistory(): HistoryEntry[] {
   }
 }
 
-export function saveHistory(history: HistoryEntry[]): void {
+export function saveHistory(history: HistoryEntry[], fingerprint?: string): void {
   try {
+    const historyKey = getHistoryStorageKey(fingerprint);
+    const timestampKey = getTimestampStorageKey(fingerprint);
     // Trim to MAX_HISTORY_ENTRIES before saving (keeps most recent)
     const trimmed = trimHistory(history);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
-    localStorage.setItem(HISTORY_TIMESTAMP_KEY, Date.now().toString());
+    localStorage.setItem(historyKey, JSON.stringify(trimmed));
+    localStorage.setItem(timestampKey, Date.now().toString());
   } catch (err) {
     // Storage full or unavailable
     console.warn("Failed to save history to localStorage:", err);
   }
 }
 
-export function getSavedSessionSecret(): string | null {
+export function getLastUsedSecret(): string | null {
   try {
-    return localStorage.getItem(SESSION_SECRET_KEY) || null;
+    return localStorage.getItem(LAST_USED_SECRET_KEY) || null;
   } catch (err) {
-    console.warn("Failed to get saved session secret:", err);
+    console.warn("Failed to get last used secret:", err);
     return null;
   }
 }
 
-export function saveSessionSecret(secret: string): void {
+export function saveLastUsedSecret(secret: string): void {
   try {
-    localStorage.setItem(SESSION_SECRET_KEY, secret);
+    localStorage.setItem(LAST_USED_SECRET_KEY, secret);
   } catch (err) {
-    console.warn("Failed to save session secret:", err);
+    console.warn("Failed to save last used secret:", err);
   }
 }

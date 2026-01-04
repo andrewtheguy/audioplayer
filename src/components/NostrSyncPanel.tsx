@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { generateSecret } from "@/lib/nostr-crypto";
 import { RELAYS } from "@/lib/nostr-sync";
-import { getSavedSessionSecret, type HistoryEntry } from "@/lib/history";
+import { getLastUsedSecret, getStorageFingerprint, type HistoryEntry } from "@/lib/history";
 import { cn } from "@/lib/utils";
 import {
   useNostrSession,
@@ -16,6 +16,7 @@ interface NostrSyncPanelProps {
   onSessionStatusChange?: (status: SessionStatus) => void;
   onTakeOver?: (remoteHistory: HistoryEntry[]) => void;
   onRemoteSync?: (remoteHistory: HistoryEntry[]) => void;
+  onFingerprintChange?: (fingerprint: string | undefined) => void;
   sessionId?: string;
   isPlayingRef?: React.RefObject<boolean>; // For frequent position updates during playback
 }
@@ -26,12 +27,13 @@ export function NostrSyncPanel({
   onSessionStatusChange,
   onTakeOver,
   onRemoteSync,
+  onFingerprintChange,
   sessionId,
   isPlayingRef,
 }: NostrSyncPanelProps) {
   const [showDetails, setShowDetails] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [savedSessionSecret] = useState(() => getSavedSessionSecret());
+  const [savedSessionSecret] = useState(() => getLastUsedSecret());
   const {
     secret,
     sessionStatus,
@@ -88,6 +90,23 @@ export function NostrSyncPanel({
       }
     };
   }, []);
+
+  // Compute storage fingerprint from secret and notify parent
+  useEffect(() => {
+    if (!secret) {
+      onFingerprintChange?.(undefined);
+      return;
+    }
+    let cancelled = false;
+    getStorageFingerprint(secret).then((fingerprint) => {
+      if (!cancelled) {
+        onFingerprintChange?.(fingerprint);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [secret, onFingerprintChange]);
 
   const handleGenerate = () => {
     const newSecret = generateSecret();
