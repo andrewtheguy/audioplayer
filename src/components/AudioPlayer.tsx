@@ -826,12 +826,21 @@ function AudioPlayerInner({
     session.setActionHandler("seekforward", () => {
       seekRelative(30);
     });
+    // iOS hardware skip buttons (AirPods, CarPlay, lock screen) trigger these
+    session.setActionHandler("previoustrack", () => {
+      seekRelative(-15);
+    });
+    session.setActionHandler("nexttrack", () => {
+      seekRelative(30);
+    });
 
     return () => {
       session.setActionHandler("play", null);
       session.setActionHandler("pause", null);
       session.setActionHandler("seekbackward", null);
       session.setActionHandler("seekforward", null);
+      session.setActionHandler("previoustrack", null);
+      session.setActionHandler("nexttrack", null);
     };
   }, []);
 
