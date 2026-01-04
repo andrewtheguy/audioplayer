@@ -91,7 +91,6 @@ function AudioPlayerInner({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(1);
   const [isLoaded, setIsLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -144,7 +143,7 @@ function AudioPlayerInner({
     }
   }, [isPlaying]);
 
-  // Setup Web Audio API for gain control
+  // Setup Web Audio API for gain control (needed for iOS volume control)
   const setupGainNode = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || sourceNodeRef.current) return; // Already setup
@@ -160,19 +159,20 @@ function AudioPlayerInner({
     sourceNodeRef.current = source;
     gainNodeRef.current = gainNode;
 
+    // Apply current gain immediately after setup
+    gainNode.gain.value = gainRef.current;
+
     ctx.resume().catch((err) => {
       console.error("Failed to resume AudioContext:", err);
     });
   }, []);
 
-  // Apply combined gain: volume * boost multiplier
-  // This ensures volume works on iOS (which ignores audio.volume)
+  // Apply gain value when enabled
   useEffect(() => {
     if (gainNodeRef.current) {
-      const boostMultiplier = gainEnabled ? gain : 1;
-      gainNodeRef.current.gain.value = volume * boostMultiplier;
+      gainNodeRef.current.gain.value = gainEnabled ? gain : 1;
     }
-  }, [volume, gain, gainEnabled]);
+  }, [gain, gainEnabled]);
 
   // Handle gain toggle
   const handleGainToggle = useCallback(() => {
@@ -635,19 +635,6 @@ function AudioPlayerInner({
       setCurrentTime(newTime);
     }
   };
-
-  const handleVolumeChange = useCallback((value: number[]) => {
-    const audio = audioRef.current;
-    if (audio) {
-      audio.volume = value[0];
-      setVolume(value[0]);
-      // Set up GainNode on first volume change for iOS support
-      // (iOS ignores audio.volume, so we need Web Audio API)
-      if (!sourceNodeRef.current) {
-        setupGainNode();
-      }
-    }
-  }, [setupGainNode]);
 
   const jumpToLiveEdge = () => {
     if (!isLiveStream) return;
@@ -1173,18 +1160,6 @@ function AudioPlayerInner({
           </div>
         )}
 
-        <div className="flex items-center gap-3">
-          <VolumeIcon className="w-4 h-4 text-muted-foreground" />
-          <Slider
-            value={[volume]}
-            max={1}
-            step={0.01}
-            onValueChange={handleVolumeChange}
-            disabled={isViewOnly}
-            className="w-24"
-          />
-        </div>
-
         {/* Gain Control */}
         <div className="flex items-center gap-3">
           <button
@@ -1377,19 +1352,6 @@ function AudioPlayerInner({
         />
       </div>
     </div>
-  );
-}
-
-function VolumeIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      fill="currentColor"
-      viewBox="0 0 24 24"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
-    </svg>
   );
 }
 
