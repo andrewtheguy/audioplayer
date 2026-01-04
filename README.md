@@ -14,6 +14,7 @@ A web-based audio player supporting standard audio formats and HLS streaming, bu
   - Copy URL to clipboard
   - Delete individual entries or clear all
   - Collapsible history list
+  - History is scoped by session secret (different secrets = isolated histories)
 - **Position Persistence** - Saves playback position every 5 seconds while playing (non-live streams)
 - **Now Playing** - Displays currently loaded stream URL
 - **Cross-Device Sync** - Sync playback history via Nostr protocol

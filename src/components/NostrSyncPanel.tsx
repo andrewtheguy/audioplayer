@@ -34,6 +34,7 @@ export function NostrSyncPanel({
   const [showDetails, setShowDetails] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [savedSessionSecret] = useState(() => getLastUsedSecret());
+  const [displayFingerprint, setDisplayFingerprint] = useState<string | undefined>(undefined);
   const {
     secret,
     sessionStatus,
@@ -95,6 +96,7 @@ export function NostrSyncPanel({
   useEffect(() => {
     if (!secret) {
       onFingerprintChange?.(undefined);
+      setDisplayFingerprint(undefined);
       return;
     }
     let cancelled = false;
@@ -102,12 +104,16 @@ export function NostrSyncPanel({
       .then((fingerprint) => {
         if (!cancelled) {
           onFingerprintChange?.(fingerprint);
+          // Format with dashes for display: XXXX-XXXX-XXXX-XXXX
+          const formatted = fingerprint.toUpperCase().match(/.{1,4}/g)?.join("-");
+          setDisplayFingerprint(formatted);
         }
       })
       .catch((err) => {
         console.error("Failed to compute storage fingerprint:", err);
         if (!cancelled) {
           onFingerprintChange?.(undefined);
+          setDisplayFingerprint(undefined);
         }
       });
     return () => {
@@ -307,9 +313,9 @@ export function NostrSyncPanel({
             </ul>
              {secret && (
                 <div className="pt-2">
-                    <div className="font-medium">Secret Fingerprint:</div>
+                    <div className="font-medium">Storage Fingerprint:</div>
                     <code className="font-mono text-[10px] block mt-0.5 select-all">
-                        {lastOperation?.fingerprint || "..."}
+                        {displayFingerprint || "..."}
                     </code>
                      <div className="font-medium mt-1">Session ID:</div>
                     <code className="font-mono text-[10px] block mt-0.5 select-all truncate">
