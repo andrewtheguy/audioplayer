@@ -1,7 +1,64 @@
 export const STORAGE_KEY = "com.audioplayer.history.v1";
 export const HISTORY_TIMESTAMP_KEY = "com.audioplayer.history.timestamp";
 export const LAST_USED_SECRET_KEY = "com.audioplayer.session.last_used_secret";
+export const SESSION_STATE_KEY = "com.audioplayer.session.state";
 export const MAX_HISTORY_ENTRIES = 100;
+
+/**
+ * Session state stored in sessionStorage to detect true session takeovers on resume.
+ * Using sessionStorage ensures this data is cleared when the tab/browser is closed,
+ * which is the correct behavior since a new tab should start fresh.
+ */
+export interface SessionState {
+  sessionId: string;
+  lastPublishedTimestamp: number;
+}
+
+/**
+ * Simple sync hash for sessionStorage keys.
+ * Uses first 16 chars of secret - sufficient for key uniqueness.
+ * For sensitive fingerprints, use getStorageFingerprint instead.
+ */
+export function getSecretKeyPrefix(secret: string): string {
+  return secret.slice(0, 16);
+}
+
+function getSessionStateKey(secretKeyPrefix: string): string {
+  return `${SESSION_STATE_KEY}.${secretKeyPrefix}`;
+}
+
+export function getSessionState(fingerprint: string): SessionState | null {
+  try {
+    const key = getSessionStateKey(fingerprint);
+    const data = sessionStorage.getItem(key);
+    if (!data) return null;
+    const parsed = JSON.parse(data);
+    if (typeof parsed.sessionId === "string" && typeof parsed.lastPublishedTimestamp === "number") {
+      return parsed as SessionState;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveSessionState(fingerprint: string, state: SessionState): void {
+  try {
+    const key = getSessionStateKey(fingerprint);
+    sessionStorage.setItem(key, JSON.stringify(state));
+  } catch {
+    // sessionStorage unavailable
+  }
+}
+
+export function clearSessionState(fingerprint: string): void {
+  try {
+    const key = getSessionStateKey(fingerprint);
+    sessionStorage.removeItem(key);
+  } catch {
+    // sessionStorage unavailable
+  }
+}
 
 /**
  * Generate a storage-key-safe fingerprint from a secret.

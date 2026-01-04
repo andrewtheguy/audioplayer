@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isValidSecret } from "@/lib/nostr-crypto";
-import { saveLastUsedSecret } from "@/lib/history";
+import { saveLastUsedSecret, getSessionState, getSecretKeyPrefix } from "@/lib/history";
 
 export type SessionStatus = "idle" | "active" | "stale" | "invalid" | "unknown";
 
@@ -47,7 +47,16 @@ function computeInitialState() {
   const secret = getSecretFromHash();
   const status = getInitialStatus(secret);
   const notice = getInitialNotice(status);
-  return { secret, status, notice };
+  // Try to restore sessionId from sessionStorage for this secret
+  let restoredSessionId: string | null = null;
+  if (secret && status !== "invalid") {
+    const keyPrefix = getSecretKeyPrefix(secret);
+    const savedState = getSessionState(keyPrefix);
+    if (savedState) {
+      restoredSessionId = savedState.sessionId;
+    }
+  }
+  return { secret, status, notice, restoredSessionId };
 }
 
 export function useNostrSession({
@@ -61,7 +70,10 @@ export function useNostrSession({
   const [secret, setSecret] = useState(initial.secret);
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>(initial.status);
   const [sessionNotice, setSessionNotice] = useState<string | null>(initial.notice);
-  const [localSessionId] = useState(() => sessionId ?? crypto.randomUUID());
+  // Use restored sessionId from sessionStorage if available, otherwise generate new
+  const [localSessionId] = useState(
+    () => sessionId ?? initial.restoredSessionId ?? crypto.randomUUID()
+  );
   const [ignoreRemoteUntil, setIgnoreRemoteUntil] = useState<number>(0);
 
   const prevStatusRef = useRef<SessionStatus>(sessionStatus);
