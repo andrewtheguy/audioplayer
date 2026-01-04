@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { generateSecret } from "@/lib/nostr-crypto";
 import { RELAYS } from "@/lib/nostr-sync";
-import { getLastUsedSecret, getStorageFingerprint, type HistoryEntry } from "@/lib/history";
+import { getStorageFingerprint, type HistoryEntry } from "@/lib/history";
 import { cn } from "@/lib/utils";
 import {
   useNostrSession,
@@ -33,7 +32,6 @@ export function NostrSyncPanel({
 }: NostrSyncPanelProps) {
   const [showDetails, setShowDetails] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [savedSessionSecret] = useState(() => getLastUsedSecret());
   const [displayFingerprint, setDisplayFingerprint] = useState<string | undefined>(undefined);
   const {
     secret,
@@ -122,16 +120,9 @@ export function NostrSyncPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [secret]);
 
-  const handleGenerate = () => {
-    const newSecret = generateSecret();
-    window.location.hash = newSecret;
-    // The hashchange listener will pick this up and trigger state update + load
-  };
-
-  const handleResumePreviousSession = () => {
-    if (savedSessionSecret) {
-      window.location.hash = savedSessionSecret;
-    }
+  const goToHome = () => {
+    window.history.pushState(null, "", window.location.pathname);
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
   };
 
   const handleCopyLink = async () => {
@@ -192,41 +183,18 @@ export function NostrSyncPanel({
         )}
       </div>
 
-      {!secret ? (
+      {sessionStatus === 'invalid' ? (
         <div className="space-y-2">
           <div className="text-xs text-muted-foreground">
-            View only. Start or resume a session to enable playback.
+            Invalid session link. Go home to start a new session.
           </div>
           <Button
             size="sm"
-            variant="default"
-            onClick={handleGenerate}
-            disabled={isLoading}
-            className="w-full h-8 text-xs"
-          >
-            Start New Session
-          </Button>
-          {savedSessionSecret && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleResumePreviousSession}
-              disabled={isLoading}
-              className="w-full h-8 text-xs"
-            >
-              Resume Previous Session
-            </Button>
-          )}
-        </div>
-      ) : sessionStatus === 'invalid' ? (
-        <div className="space-y-2">
-          <Button
-            size="sm"
             variant="outline"
-            onClick={handleGenerate}
+            onClick={goToHome}
             className="w-full h-8 text-xs"
           >
-            Generate New Secret Link
+            Go to Home
           </Button>
         </div>
       ) : (
