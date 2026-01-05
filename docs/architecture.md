@@ -20,7 +20,7 @@ URL: #npub1abc...xyz
         ▼
 ┌──────────────────┐
 │  Player ID       │  (on relay: encrypted with secondary secret, signed by nsec)
-│                  │  (fetched from relay on each session start)
+│                  │  (fetched from relay during initialization; not cached in localStorage)
 │                  │  (derives keys for history encryption AND signing)
 └──────────────────┘
         │
