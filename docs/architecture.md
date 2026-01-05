@@ -27,7 +27,19 @@ Key features:
 - Playback position tracking and restoration
 - Pending seek mechanism with retry logic for reliable position sync
 - Web Audio API gain control for volume boost beyond 100%
+- iOS Safari HLS workaround: a decoded Web Audio pipeline (m3u8-parser + mux.js) is used so GainNode/meter work on HLS streams, including live playlists
 - History management with auto-save every 5 seconds during playback (non-live streams)
+
+#### GainNode workaround (iOS Safari + HLS)
+
+iOS Safari routes native HLS playback outside the Web Audio graph, so GainNode and the meter do not work with a normal `<audio>` element. To keep Boost and the meter functional, the player switches to a decoded pipeline for HLS on iOS Safari:
+
+- Parse HLS playlists with `m3u8-parser`.
+- Fetch TS segments directly and transmux to fMP4 with `mux.js`.
+- Decode via `AudioContext.decodeAudioData` and schedule `AudioBufferSourceNode` into the GainNode/AnalyserNode chain.
+- For live playlists, use an explicit buffering strategy: compute the live edge from the last playlist segment (or `EXT-X-PROGRAM-DATE-TIME` when present), maintain a sliding window of the newest 3–6 segments (~6–12s), deduplicate by URI/sequence, and drop segments older than the window. Poll the playlist at half the target segment duration (min 1s). Fetch/decode with bounded concurrency to avoid overload. If playback drift exceeds one segment, resync by re-fetching the playlist and resetting the window.
+
+This path is only used for iOS Safari + `.m3u8` URLs; all other browsers use the native `<audio>` element with hls.js.
 
 ### NostrSyncPanel (`components/NostrSyncPanel.tsx`)
 

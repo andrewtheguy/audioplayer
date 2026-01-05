@@ -281,6 +281,15 @@ export class HlsAudioDecoder {
         }
 
         const startTime = Math.max(this.scheduleCursor, this.ctx.currentTime + 0.02);
+        if (this.nextSegmentIndex === this.segments.length - 1) {
+          source.onended = () => {
+            if (token !== this.scheduleToken) return;
+            if (!this.isPlaying) return;
+            this.isPlaying = false;
+            this.callbacks.onState(false);
+            this.callbacks.onEnded();
+          };
+        }
         source.start(startTime, segmentOffset);
         this.sources.push(source);
         this.scheduleCursor = startTime + playDuration;
@@ -288,14 +297,7 @@ export class HlsAudioDecoder {
         offset = 0;
       }
 
-      if (this.nextSegmentIndex >= this.segments.length && this.isPlaying && token === this.scheduleToken) {
-        const remaining = Math.max(0, this.duration - this.computeCurrentTime());
-        if (remaining < 0.1) {
-          this.isPlaying = false;
-          this.callbacks.onState(false);
-          this.callbacks.onEnded();
-        }
-      }
+      // End-of-playback is handled by the onended handler for the final source.
     } finally {
       this.scheduling = false;
     }
@@ -465,14 +467,16 @@ export class HlsAudioDecoder {
 
     const mux = muxjs as { mp4: { Transmuxer: new (opts: { keepOriginalTimestamps: boolean }) => {
       on: (event: string, handler: (data: unknown) => void) => void;
+      off?: (event: string, handler: (data: unknown) => void) => void;
       push: (data: Uint8Array) => void;
       flush: () => void;
     } } };
     const transmuxer = new mux.mp4.Transmuxer({ keepOriginalTimestamps: true });
     const segments: Uint8Array[] = [];
     let initSegment: Uint8Array | null = null;
+    let transmuxErrorMessage: string | null = null;
 
-    transmuxer.on("data", (segment) => {
+    const handleData = (segment: unknown) => {
       const payload = segment as { initSegment?: Uint8Array; data?: Uint8Array };
       if (!payload.initSegment || !payload.data) {
         return;
@@ -481,13 +485,25 @@ export class HlsAudioDecoder {
         initSegment = payload.initSegment;
       }
       segments.push(payload.data);
-    });
-    transmuxer.on("error", (err: unknown) => {
-      throw new Error(`Transmuxer error: ${(err as Error).message}`);
-    });
+    };
+    const handleError = (err: unknown) => {
+      transmuxErrorMessage = err instanceof Error ? err.message : String(err);
+    };
+
+    transmuxer.on("data", handleData);
+    transmuxer.on("error", handleError);
 
     transmuxer.push(data);
     transmuxer.flush();
+
+    if (transmuxer.off) {
+      transmuxer.off("data", handleData);
+      transmuxer.off("error", handleError);
+    }
+
+    if (transmuxErrorMessage !== null) {
+      throw new Error(`Transmuxer error: ${transmuxErrorMessage}`);
+    }
 
     if (!initSegment || segments.length === 0) {
       throw new Error("Transmuxer produced no audio data.");
