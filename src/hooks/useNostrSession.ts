@@ -332,17 +332,26 @@ export function useNostrSession({
         return false;
       }
 
-      // Verify nsec matches npub
+      // Derive pubkey from nsec
       const derivedPubkey = getPublicKey(privateKeyBytes);
-      if (derivedPubkey !== pubkeyHex) {
+
+      // Get expected pubkey from URL (handles stale React state after pushState)
+      const currentNpub = getNpubFromPath();
+      const expectedPubkey = currentNpub ? parseNpub(currentNpub) : pubkeyHex;
+
+      if (!expectedPubkey) {
+        setSessionNotice("No identity in URL.");
+        return false;
+      }
+
+      // Verify nsec matches the npub in URL
+      if (derivedPubkey !== expectedPubkey) {
         setSessionNotice("nsec does not match this identity.");
         return false;
       }
 
-      if (!fingerprint) {
-        setSessionNotice("No identity loaded.");
-        return false;
-      }
+      // Compute fingerprint on-the-fly if React state is stale
+      const fp = fingerprint ?? (await getStorageScope(expectedPubkey));
 
       // Use provided secret or existing or generate new
       let secret = newSecondarySecret;
@@ -356,11 +365,11 @@ export function useNostrSession({
       }
 
       // Store the secret
-      setSecondarySecret(fingerprint, secret);
+      setSecondarySecret(fp, secret);
       setSecondarySecretState(secret);
 
       // Optionally store nsec for convenience
-      storeNsec(fingerprint, nsec);
+      storeNsec(fp, nsec);
 
       // Generate new player id
       const newPlayerId = generatePlayerId();
@@ -372,7 +381,7 @@ export function useNostrSession({
           newPlayerId,
           secret,
           privateKeyBytes,
-          pubkeyHex!
+          expectedPubkey
         );
       } catch (err) {
         setSessionNotice(
@@ -381,6 +390,11 @@ export function useNostrSession({
         setSessionStatus("needs_setup");
         return false;
       }
+
+      // Update React state to match URL (in case it was stale)
+      setNpub(currentNpub);
+      setPubkeyHex(expectedPubkey);
+      setFingerprint(fp);
 
       // Set player id and derive encryption keys
       setPlayerId(newPlayerId);
