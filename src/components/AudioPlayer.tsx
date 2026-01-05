@@ -509,13 +509,88 @@ function AudioPlayerInner({
     }
   };
 
+  // Validate URL format
+  const isValidUrl = (urlString: string): boolean => {
+    try {
+      const parsed = new URL(urlString);
+      return parsed.protocol === "http:" || parsed.protocol === "https:";
+    } catch {
+      return false;
+    }
+  };
+
+  // Validate audio stream by checking content-type or file extension
+  const validateAudioSource = async (urlString: string): Promise<{ valid: boolean; error?: string }> => {
+    // Check common audio file extensions first
+    const audioExtensions = [".mp3", ".m4a", ".aac", ".ogg", ".wav", ".flac", ".opus", ".m3u8", ".m3u"];
+    const urlLower = urlString.toLowerCase();
+    const hasAudioExtension = audioExtensions.some((ext) => urlLower.includes(ext));
+
+    if (hasAudioExtension) {
+      return { valid: true };
+    }
+
+    // For URLs without clear audio extension, try HEAD request
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+      const response = await fetch(urlString, {
+        method: "HEAD",
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        return { valid: false, error: `URL returned ${response.status}: ${response.statusText}` };
+      }
+
+      const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+      const validTypes = [
+        "audio/",
+        "application/ogg",
+        "application/vnd.apple.mpegurl",
+        "application/x-mpegurl",
+        "application/octet-stream", // Some servers use this for audio
+      ];
+
+      if (validTypes.some((type) => contentType.includes(type))) {
+        return { valid: true };
+      }
+
+      // If content-type doesn't indicate audio, warn but allow (some servers misconfigure)
+      return { valid: true };
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        return { valid: false, error: "Connection timed out. Please check the URL." };
+      }
+      // Network errors - allow to proceed (CORS may block HEAD but audio may still work)
+      return { valid: true };
+    }
+  };
+
   // Load from URL input
-  const loadStream = () => {
+  const loadStream = async () => {
     const urlToLoad = url.trim();
     if (!urlToLoad) {
       setError("Please enter a URL");
       return;
     }
+
+    // Validate URL format
+    if (!isValidUrl(urlToLoad)) {
+      setError("Invalid URL format. Please enter a valid http:// or https:// URL.");
+      return;
+    }
+
+    // Validate audio source
+    setError(null);
+    const validation = await validateAudioSource(urlToLoad);
+    if (!validation.valid) {
+      setError(validation.error ?? "Unable to verify this is a valid audio source.");
+      return;
+    }
+
     loadUrl(urlToLoad);
   };
 
