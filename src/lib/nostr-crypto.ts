@@ -1,6 +1,6 @@
 import { getPublicKey, generateSecretKey } from "nostr-tools/pure";
 import { encrypt, decrypt, getConversationKey } from "nostr-tools/nip44";
-import { decode as decodeNip19 } from "nostr-tools/nip19";
+import { decode as decodeNip19, npubEncode, nsecEncode } from "nostr-tools/nip19";
 import type { HistoryEntry, HistoryPayload } from "./history";
 
 export interface NostrKeys {
@@ -8,21 +8,19 @@ export interface NostrKeys {
   publicKey: string;
 }
 
-// Fixed salt for domain separation
-const SALT = "audioplayer-secret-nostr-v1";
+// Fixed salt for domain separation when deriving keys from player id
+const PLAYER_ID_SALT = "audioplayer-playerid-v1";
 
-// Secret format: 11 random bytes + 1 checksum byte = 12 bytes → 16 base64 chars
+// Secondary secret format: 11 random bytes + 1 checksum byte = 12 bytes → 16 base64 chars
 const SECRET_RANDOM_BYTES = 11;
-const SECRET_TOTAL_BYTES = 12; // SECRET_RANDOM_BYTES + 1 checksum
-const SECRET_LENGTH = 16; // base64 encoded length
+const SECRET_TOTAL_BYTES = 12;
+const SECRET_LENGTH = 16;
+
+// Player ID format: 32 random bytes → 64 hex chars
+const PLAYER_ID_LENGTH = 64;
 
 /**
  * CRC-8-CCITT lookup table (polynomial 0x07).
- * Provides stronger error detection than XOR or sum:
- * - Detects all single-bit errors
- * - Detects all double-bit errors
- * - Detects all odd numbers of bit errors
- * - Detects most burst errors
  */
 const CRC8_TABLE = new Uint8Array([
   0x00, 0x07, 0x0e, 0x09, 0x1c, 0x1b, 0x12, 0x15,
@@ -59,10 +57,6 @@ const CRC8_TABLE = new Uint8Array([
   0xe6, 0xe1, 0xe8, 0xef, 0xfa, 0xfd, 0xf4, 0xf3,
 ]);
 
-/**
- * Compute CRC-8-CCITT checksum (polynomial 0x07).
- * Uses table lookup for efficiency.
- */
 function computeChecksum(bytes: Uint8Array): number {
   let crc = 0;
   for (const b of bytes) {
@@ -71,9 +65,6 @@ function computeChecksum(bytes: Uint8Array): number {
   return crc;
 }
 
-/**
- * Decode URL-safe Base64 to Uint8Array.
- */
 function decodeUrlSafeBase64(str: string): Uint8Array | null {
   try {
     const base64 = str.replace(/-/g, "+").replace(/_/g, "/");
@@ -89,12 +80,52 @@ function decodeUrlSafeBase64(str: string): Uint8Array | null {
   }
 }
 
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+  }
+  return bytes;
+}
+
+// =============================================================================
+// Player ID Functions
+// =============================================================================
+
 /**
- * Generate a random URL-safe Base64 secret with checksum.
- * Uses 11 bytes of entropy (88 bits) + 1 checksum byte, resulting in a 16-character string.
- * The checksum allows fail-fast validation of typos before attempting decryption.
+ * Generate a new player id (32 random bytes, hex encoded = 64 chars)
  */
-export function generateSecret(): string {
+export function generatePlayerId(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return bytesToHex(bytes);
+}
+
+/**
+ * Validate player id format (64 hex characters)
+ */
+export function isValidPlayerId(playerId: string): boolean {
+  return (
+    typeof playerId === "string" &&
+    playerId.length === PLAYER_ID_LENGTH &&
+    /^[0-9a-fA-F]+$/.test(playerId)
+  );
+}
+
+// =============================================================================
+// Secondary Secret Functions (for encrypting player id)
+// =============================================================================
+
+/**
+ * Generate a random URL-safe Base64 secondary secret with checksum.
+ */
+export function generateSecondarySecret(): string {
   const randomBytes = new Uint8Array(SECRET_RANDOM_BYTES);
   crypto.getRandomValues(randomBytes);
   const checksum = computeChecksum(randomBytes);
@@ -108,10 +139,9 @@ export function generateSecret(): string {
 }
 
 /**
- * Validate a secret string has correct format and checksum.
- * Returns true if valid, false if checksum fails or format is invalid.
+ * Validate a secondary secret string has correct format and checksum.
  */
-export function isValidSecret(secret: string): boolean {
+export function isValidSecondarySecret(secret: string): boolean {
   if (typeof secret !== "string" || secret.length !== SECRET_LENGTH) {
     return false;
   }
@@ -126,31 +156,12 @@ export function isValidSecret(secret: string): boolean {
 }
 
 /**
- * Derive Nostr secp256k1 keypair from a secret string using SHA-256.
- * Uses a fixed salt to prevent rainbow table attacks if secrets are leaked,
- * though the secrets themselves are high-entropy random strings.
+ * Derive an AES-GCM key from secondary secret for symmetric encryption
  */
-function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throw new DOMException("Aborted", "AbortError");
-  }
-}
-
-export async function deriveNostrKeys(
-  secret: string,
-  signal?: AbortSignal
-): Promise<NostrKeys> {
-  if (!secret) {
-    throw new Error("Secret cannot be empty");
-  }
-  if (!isValidSecret(secret)) {
-    throw new Error("Invalid secret format or checksum");
-  }
-  throwIfAborted(signal);
-
+async function deriveAesKeyFromSecret(secret: string): Promise<CryptoKey> {
   const encoder = new TextEncoder();
   const secretBytes = encoder.encode(secret);
-  const saltBytes = encoder.encode(SALT);
+  const saltBytes = encoder.encode("audioplayer-secondary-secret-v1");
 
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
@@ -159,7 +170,223 @@ export async function deriveNostrKeys(
     false,
     ["deriveBits"]
   );
+
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: saltBytes,
+      info: new Uint8Array(0),
+    },
+    keyMaterial,
+    256
+  );
+
+  return crypto.subtle.importKey(
+    "raw",
+    derivedBits,
+    { name: "AES-GCM" },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+/**
+ * Encrypt data with secondary secret using AES-GCM
+ */
+export async function encryptWithSecondarySecret(
+  data: string,
+  secondarySecret: string
+): Promise<string> {
+  if (!isValidSecondarySecret(secondarySecret)) {
+    throw new Error("Invalid secondary secret format");
+  }
+
+  const key = await deriveAesKeyFromSecret(secondarySecret);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoder = new TextEncoder();
+  const dataBytes = encoder.encode(data);
+
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    dataBytes
+  );
+
+  // Combine IV + ciphertext and base64 encode
+  const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+  combined.set(iv);
+  combined.set(new Uint8Array(ciphertext), iv.length);
+
+  return btoa(String.fromCharCode(...combined));
+}
+
+/**
+ * Decrypt data with secondary secret using AES-GCM
+ */
+export async function decryptWithSecondarySecret(
+  ciphertext: string,
+  secondarySecret: string
+): Promise<string> {
+  if (!isValidSecondarySecret(secondarySecret)) {
+    throw new Error("Invalid secondary secret format");
+  }
+
+  const key = await deriveAesKeyFromSecret(secondarySecret);
+
+  let combined: Uint8Array;
+  try {
+    const binary = atob(ciphertext);
+    combined = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      combined[i] = binary.charCodeAt(i);
+    }
+  } catch {
+    throw new Error("Invalid ciphertext format");
+  }
+
+  if (combined.length < 13) {
+    throw new Error("Ciphertext too short");
+  }
+
+  const iv = combined.slice(0, 12);
+  const encrypted = combined.slice(12);
+
+  try {
+    const decrypted = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv },
+      key,
+      encrypted
+    );
+    const decoder = new TextDecoder();
+    return decoder.decode(decrypted);
+  } catch {
+    throw new Error("Decryption failed - wrong secret?");
+  }
+}
+
+// =============================================================================
+// npub/nsec Functions
+// =============================================================================
+
+/**
+ * Parse npub from URL hash and return hex public key, or null if invalid
+ */
+export function parseNpubFromHash(hash: string): string | null {
+  const npub = hash.startsWith("#") ? hash.slice(1) : hash;
+  if (!npub || !npub.startsWith("npub1")) {
+    return null;
+  }
+  try {
+    const decoded = decodeNip19(npub);
+    if (decoded.type !== "npub" || typeof decoded.data !== "string") {
+      return null;
+    }
+    const pubkeyHex = decoded.data;
+    if (pubkeyHex.length !== 64 || !/^[0-9a-fA-F]+$/.test(pubkeyHex)) {
+      return null;
+    }
+    return pubkeyHex;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate npub format
+ */
+export function isValidNpub(npub: string): boolean {
+  return parseNpubFromHash(npub) !== null;
+}
+
+/**
+ * Decode nsec to get private key bytes, or null if invalid
+ */
+export function decodeNsec(nsec: string): Uint8Array | null {
+  if (!nsec || !nsec.startsWith("nsec1")) {
+    return null;
+  }
+  try {
+    const decoded = decodeNip19(nsec);
+    if (decoded.type === "nsec" && decoded.data instanceof Uint8Array && decoded.data.length === 32) {
+      return decoded.data;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Encode hex public key to npub
+ */
+export function encodeNpub(hexPubkey: string): string {
+  if (hexPubkey.length !== 64 || !/^[0-9a-fA-F]+$/.test(hexPubkey)) {
+    throw new Error("Invalid hex public key");
+  }
+  return npubEncode(hexPubkey);
+}
+
+/**
+ * Generate a new nostr keypair and return as { nsec, npub, privateKey, publicKey }
+ */
+export function generateNostrKeypair(): {
+  nsec: string;
+  npub: string;
+  privateKey: Uint8Array;
+  publicKey: string;
+} {
+  const privateKey = generateSecretKey();
+  const publicKey = getPublicKey(privateKey);
+  const npub = npubEncode(publicKey);
+  const nsec = nsecEncode(privateKey);
+  return { nsec, npub, privateKey, publicKey };
+}
+
+// =============================================================================
+// Key Derivation from Player ID
+// =============================================================================
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+}
+
+/**
+ * Derive Nostr secp256k1 keypair from a player id using HKDF-SHA256.
+ * This keypair is used for NIP-44 encryption of history data.
+ */
+export async function deriveEncryptionKey(
+  playerId: string,
+  signal?: AbortSignal
+): Promise<NostrKeys> {
+  if (!playerId) {
+    throw new Error("Player ID cannot be empty");
+  }
+  if (!isValidPlayerId(playerId)) {
+    throw new Error("Invalid player ID format");
+  }
   throwIfAborted(signal);
+
+  const playerIdBytes = hexToBytes(playerId);
+  const encoder = new TextEncoder();
+  const saltBytes = encoder.encode(PLAYER_ID_SALT);
+
+  // Use slice to get a copy as ArrayBuffer (avoids SharedArrayBuffer type issues)
+  const playerIdBuffer = playerIdBytes.buffer.slice(
+    playerIdBytes.byteOffset,
+    playerIdBytes.byteOffset + playerIdBytes.byteLength
+  ) as ArrayBuffer;
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    playerIdBuffer,
+    "HKDF",
+    false,
+    ["deriveBits"]
+  );
+  throwIfAborted(signal);
+
   const derivedBits = await crypto.subtle.deriveBits(
     {
       name: "HKDF",
@@ -171,27 +398,94 @@ export async function deriveNostrKeys(
     256
   );
   throwIfAborted(signal);
+
   const privateKey = new Uint8Array(derivedBits);
 
-  // Validate the derived key is a valid secp256k1 private key
-  // by attempting to derive the public key
   let publicKey: string;
   try {
     publicKey = getPublicKey(privateKey);
   } catch {
-    // Extremely rare case where hash output is invalid for secp256k1
-    // (outside curve order). Practically negligible probability.
-    throw new Error(
-      "Derived key is invalid. Please generate a new secret."
-    );
+    throw new Error("Derived key is invalid. Please generate a new player ID.");
   }
 
   return { privateKey, publicKey };
 }
 
+// =============================================================================
+// History Encryption (using player id derived key)
+// =============================================================================
+
+function isValidHistoryEntry(value: unknown): value is HistoryEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.url === "string" &&
+    (entry.title === undefined || typeof entry.title === "string") &&
+    typeof entry.lastPlayedAt === "string" &&
+    typeof entry.position === "number" &&
+    (entry.gain === undefined || typeof entry.gain === "number")
+  );
+}
+
+function validateHistoryArray(data: unknown): HistoryEntry[] {
+  if (!Array.isArray(data)) {
+    throw new Error("Decrypted data is not an array");
+  }
+
+  for (let i = 0; i < data.length; i++) {
+    if (!isValidHistoryEntry(data[i])) {
+      throw new Error(`Invalid history entry at index ${i}`);
+    }
+  }
+
+  return data as HistoryEntry[];
+}
+
+function isValidHexPublicKey(value: string): boolean {
+  return value.length === 64 && /^[0-9a-fA-F]+$/.test(value);
+}
+
+function decodeValidNpub(value: string): string | null {
+  try {
+    const decoded = decodeNip19(value);
+    if (decoded.type !== "npub" || typeof decoded.data !== "string") {
+      return null;
+    }
+    return isValidHexPublicKey(decoded.data) ? decoded.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function validateHistoryPayload(data: unknown): HistoryPayload {
+  if (typeof data !== "object" || data === null) {
+    throw new Error("Payload is not an object");
+  }
+
+  const payload = data as Record<string, unknown>;
+
+  if (typeof payload.timestamp !== "number") {
+    throw new Error("Payload missing timestamp");
+  }
+
+  if (payload.sessionId !== undefined && typeof payload.sessionId !== "string") {
+    throw new Error("Payload sessionId must be a string");
+  }
+
+  return {
+    history: validateHistoryArray(payload.history),
+    timestamp: payload.timestamp,
+    sessionId: payload.sessionId as string | undefined,
+  };
+}
+
 /**
  * Encrypt history data using NIP-44 with ephemeral sender key
  * Returns encrypted payload and ephemeral public key for decryption
+ *
+ * @param data - History entries to encrypt
+ * @param recipientPublicKey - Public key derived from player id
+ * @param sessionId - Optional session ID for multi-device coordination
  */
 export function encryptHistory(
   data: HistoryEntry[],
@@ -224,81 +518,12 @@ export function encryptHistory(
 }
 
 /**
- * Validate that a value is a valid HistoryEntry
- */
-function isValidHistoryEntry(value: unknown): value is HistoryEntry {
-  if (typeof value !== "object" || value === null) return false;
-  const entry = value as Record<string, unknown>;
-  return (
-    typeof entry.url === "string" &&
-    (entry.title === undefined || typeof entry.title === "string") &&
-    typeof entry.lastPlayedAt === "string" &&
-    typeof entry.position === "number" &&
-    (entry.gain === undefined || typeof entry.gain === "number")
-  );
-}
-
-/**
- * Validate that a parsed value is an array of valid HistoryEntry objects
- */
-function validateHistoryArray(data: unknown): HistoryEntry[] {
-  if (!Array.isArray(data)) {
-    throw new Error("Decrypted data is not an array");
-  }
-
-  for (let i = 0; i < data.length; i++) {
-    if (!isValidHistoryEntry(data[i])) {
-      throw new Error(`Invalid history entry at index ${i}`);
-    }
-  }
-
-  return data as HistoryEntry[];
-}
-
-function isValidHexPublicKey(value: string): boolean {
-  return value.length === 64 && /^[0-9a-fA-F]+$/.test(value);
-}
-
-function decodeValidNpub(value: string): string | null {
-  try {
-    const decoded = decodeNip19(value);
-    if (decoded.type !== "npub" || typeof decoded.data !== "string") {
-      return null;
-    }
-    return isValidHexPublicKey(decoded.data) ? decoded.data : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Validate that a parsed value is a valid HistoryPayload
- */
-function validateHistoryPayload(data: unknown): HistoryPayload {
-  if (typeof data !== "object" || data === null) {
-    throw new Error("Payload is not an object");
-  }
-
-  const payload = data as Record<string, unknown>;
-
-  if (typeof payload.timestamp !== "number") {
-    throw new Error("Payload missing timestamp");
-  }
-
-  if (payload.sessionId !== undefined && typeof payload.sessionId !== "string") {
-    throw new Error("Payload sessionId must be a string");
-  }
-
-  return {
-    history: validateHistoryArray(payload.history),
-    timestamp: payload.timestamp,
-    sessionId: payload.sessionId as string | undefined,
-  };
-}
-
-/**
  * Decrypt history data using NIP-44
  * Validates decryption, JSON parsing, and data structure
+ *
+ * @param ciphertext - Encrypted data
+ * @param senderPublicKey - Ephemeral public key from encryption
+ * @param recipientPrivateKey - Private key derived from player id
  */
 export function decryptHistory(
   ciphertext: string,
@@ -326,7 +551,7 @@ export function decryptHistory(
     plaintext = decrypt(ciphertext, conversationKey);
   } catch (err) {
     throw new Error(
-      `Decryption failed: ${err instanceof Error ? err.message : "Unknown error"}. Wrong Secret?`
+      `Decryption failed: ${err instanceof Error ? err.message : "Unknown error"}. Wrong player ID?`
     );
   }
 

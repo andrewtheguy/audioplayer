@@ -1,19 +1,23 @@
 import { finalizeEvent } from "nostr-tools/pure";
 import { SimplePool } from "nostr-tools/pool";
 import type { HistoryEntry, HistoryPayload } from "./history";
-import { encryptHistory, decryptHistory } from "./nostr-crypto";
+import {
+  encryptHistory,
+  decryptHistory,
+  encryptWithSecondarySecret,
+  decryptWithSecondarySecret,
+} from "./nostr-crypto";
 
 export const RELAYS = [
-    "wss://nos.lol",
-    //"wss://relay.damus.io", // acceptable for index queries; not recommended for high-volume operations due to rate limiting
-    //"wss://relay.nostr.band",
-    "wss://relay.nostr.net",
-    "wss://relay.primal.net",
-    "wss://relay.snort.social",
+  "wss://nos.lol",
+  "wss://relay.nostr.net",
+  "wss://relay.primal.net",
+  "wss://relay.snort.social",
 ];
 
-const KIND_HISTORY = 30078; // NIP-78: Application-specific replaceable data
-const D_TAG = "audioplayer-v3";
+const KIND_APP_DATA = 30078; // NIP-78: Application-specific replaceable data
+const D_TAG_PLAYER_ID = "audioplayer-playerid-v1";
+const D_TAG_HISTORY = "audioplayer-history-v1";
 
 const pool = new SimplePool();
 
@@ -25,7 +29,6 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 /**
  * Close all relay connections to avoid resource leaks.
- * Call this during application shutdown or cleanup.
  */
 let poolClosed = false;
 export function closePool(): void {
@@ -34,25 +37,19 @@ export function closePool(): void {
   pool.close(RELAYS);
 }
 
-// Register cleanup handlers for browser environment
-// Both handlers are registered since browser support varies;
-// the poolClosed flag prevents duplicate cleanup calls.
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", closePool);
   window.addEventListener("pagehide", closePool);
 }
 
-/** Validated payload structure from a Nostr event */
-interface ValidatedPayload {
+/** Validated history payload structure from a Nostr event */
+interface ValidatedHistoryPayload {
   v: number;
   ephemeralPubKey: string;
   ciphertext: string;
 }
 
-/**
- * Validate the encrypted payload structure from a Nostr event
- */
-function isValidPayload(value: unknown): value is ValidatedPayload {
+function isValidHistoryPayload(value: unknown): value is ValidatedHistoryPayload {
   if (typeof value !== "object" || value === null) return false;
   const obj = value as Record<string, unknown>;
   return (
@@ -62,11 +59,7 @@ function isValidPayload(value: unknown): value is ValidatedPayload {
   );
 }
 
-/**
- * Parse and validate event content JSON
- * Throws with descriptive error messages for catch blocks
- */
-function parseAndValidateEventContent(content: string): ValidatedPayload {
+function parseAndValidateHistoryContent(content: string): ValidatedHistoryPayload {
   let payload: unknown;
   try {
     payload = JSON.parse(content);
@@ -74,7 +67,7 @@ function parseAndValidateEventContent(content: string): ValidatedPayload {
     throw new Error("Event content is not valid JSON. Data may be corrupted.");
   }
 
-  if (!isValidPayload(payload)) {
+  if (!isValidHistoryPayload(payload)) {
     throw new Error(
       "Invalid payload structure: missing or invalid ephemeralPubKey/ciphertext fields"
     );
@@ -83,9 +76,6 @@ function parseAndValidateEventContent(content: string): ValidatedPayload {
   return payload;
 }
 
-/**
- * Type guard for checking if subscription supports onerror handler
- */
 function canSetOnError(
   value: unknown
 ): value is { onerror?: (err: unknown) => void } {
@@ -94,20 +84,169 @@ function canSetOnError(
   return typeof maybe.onerror === "undefined" || typeof maybe.onerror === "function";
 }
 
+// =============================================================================
+// Player ID Event Functions
+// =============================================================================
+
+/**
+ * Check if a player id event exists for the given public key
+ */
+export async function checkPlayerIdEventExists(
+  userPublicKey: string,
+  signal?: AbortSignal
+): Promise<boolean> {
+  throwIfAborted(signal);
+  const events = await pool.querySync(RELAYS, {
+    kinds: [KIND_APP_DATA],
+    authors: [userPublicKey],
+    "#d": [D_TAG_PLAYER_ID],
+    limit: 1,
+  });
+  throwIfAborted(signal);
+  return events.length > 0;
+}
+
+/**
+ * Fetch player id event from relays
+ * Returns the encrypted player id content, or null if not found
+ */
+export async function fetchPlayerIdEventFromNostr(
+  userPublicKey: string,
+  signal?: AbortSignal
+): Promise<{ encryptedPlayerId: string; createdAt: number } | null> {
+  throwIfAborted(signal);
+  const events = await pool.querySync(RELAYS, {
+    kinds: [KIND_APP_DATA],
+    authors: [userPublicKey],
+    "#d": [D_TAG_PLAYER_ID],
+    limit: 1,
+  });
+  throwIfAborted(signal);
+
+  if (events.length === 0) {
+    return null;
+  }
+
+  const latest = events.sort((a, b) => b.created_at - a.created_at)[0];
+  return {
+    encryptedPlayerId: latest.content,
+    createdAt: latest.created_at,
+  };
+}
+
+/**
+ * Fetch and decrypt player id from relays
+ */
+export async function loadPlayerIdFromNostr(
+  userPublicKey: string,
+  secondarySecret: string,
+  signal?: AbortSignal
+): Promise<string | null> {
+  const result = await fetchPlayerIdEventFromNostr(userPublicKey, signal);
+  if (!result) {
+    return null;
+  }
+
+  try {
+    const playerId = await decryptWithSecondarySecret(
+      result.encryptedPlayerId,
+      secondarySecret
+    );
+    return playerId;
+  } catch (err) {
+    throw new Error(
+      `Failed to decrypt player ID: ${err instanceof Error ? err.message : "Unknown error"}`
+    );
+  }
+}
+
+/**
+ * Publish player id event to relays
+ * The player id is encrypted with the secondary secret before publishing
+ * The event is signed with the user's nsec
+ */
+export async function publishPlayerIdToNostr(
+  playerId: string,
+  secondarySecret: string,
+  userPrivateKey: Uint8Array,
+  userPublicKey: string,
+  signal?: AbortSignal
+): Promise<void> {
+  throwIfAborted(signal);
+
+  // Encrypt player id with secondary secret
+  const encryptedPlayerId = await encryptWithSecondarySecret(playerId, secondarySecret);
+
+  const tags = [
+    ["d", D_TAG_PLAYER_ID],
+    ["client", "audioplayer"],
+  ];
+
+  const event = finalizeEvent(
+    {
+      kind: KIND_APP_DATA,
+      created_at: Math.floor(Date.now() / 1000),
+      tags,
+      content: encryptedPlayerId,
+    },
+    userPrivateKey
+  );
+
+  // Verify the event was signed by the expected public key
+  if (event.pubkey !== userPublicKey) {
+    throw new Error("Event signed by unexpected public key - nsec may not match npub");
+  }
+
+  try {
+    throwIfAborted(signal);
+    const publishPromises = pool.publish(RELAYS, event).map((promise, index) =>
+      promise.catch((err) => {
+        const relay = RELAYS[index] ?? "unknown relay";
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[nostr] player id publish failed on ${relay}: ${message}`);
+        throw err;
+      })
+    );
+    await Promise.any(publishPromises);
+    throwIfAborted(signal);
+  } catch (err) {
+    if (err instanceof AggregateError) {
+      const reasons = err.errors
+        .map((e) => (e instanceof Error ? e.message : String(e)))
+        .join("; ");
+      throw new Error(`Failed to publish player ID to any relay: ${reasons}`);
+    }
+    throw new Error(
+      `Failed to publish player ID: ${err instanceof Error ? err.message : "Unknown error"}`
+    );
+  }
+}
+
+// =============================================================================
+// History Event Functions
+// =============================================================================
+
 /**
  * Save encrypted history to Nostr relays.
- * Throws descriptive error if all relays fail.
+ * History is encrypted using the public key derived from the player id.
+ * The event is signed using the user's nsec (identity key).
  */
 export async function saveHistoryToNostr(
   history: HistoryEntry[],
-  userPrivateKey: Uint8Array,
-  userPublicKey: string,
+  encryptionPublicKey: string, // Public key derived from player id
+  userPrivateKey: Uint8Array, // nsec for signing
+  _userPublicKey: string, // npub hex for verification (reserved for future use)
   sessionId?: string,
   signal?: AbortSignal
 ): Promise<void> {
   throwIfAborted(signal);
-  // sessionId and timestamp are now embedded in the encrypted payload
-  const { ciphertext, ephemeralPubKey } = encryptHistory(history, userPublicKey, sessionId);
+
+  // Encrypt history with the encryption key derived from player id
+  const { ciphertext, ephemeralPubKey } = encryptHistory(
+    history,
+    encryptionPublicKey,
+    sessionId
+  );
 
   const payload = JSON.stringify({
     v: 1,
@@ -116,13 +255,13 @@ export async function saveHistoryToNostr(
   });
 
   const tags = [
-    ["d", D_TAG],
+    ["d", D_TAG_HISTORY],
     ["client", "audioplayer"],
   ];
 
   const event = finalizeEvent(
     {
-      kind: KIND_HISTORY,
+      kind: KIND_APP_DATA,
       created_at: Math.floor(Date.now() / 1000),
       tags,
       content: payload,
@@ -136,19 +275,18 @@ export async function saveHistoryToNostr(
       promise.catch((err) => {
         const relay = RELAYS[index] ?? "unknown relay";
         const message = err instanceof Error ? err.message : String(err);
-        console.warn(`[nostr] publish failed on ${relay}: ${message}`);
+        console.warn(`[nostr] history publish failed on ${relay}: ${message}`);
         throw err;
       })
     );
     await Promise.any(publishPromises);
     throwIfAborted(signal);
   } catch (err) {
-    // Promise.any throws AggregateError when all promises reject
     if (err instanceof AggregateError) {
       const reasons = err.errors
         .map((e) => (e instanceof Error ? e.message : String(e)))
         .join("; ");
-      throw new Error(`Failed to publish to any relay: ${reasons}`);
+      throw new Error(`Failed to publish history to any relay: ${reasons}`);
     }
     throw new Error(
       `Failed to save to Nostr: ${err instanceof Error ? err.message : "Unknown error"}`
@@ -158,71 +296,61 @@ export async function saveHistoryToNostr(
 
 /**
  * Load and decrypt history from Nostr relays
- * Returns HistoryPayload with embedded timestamp and sessionId
+ * History is decrypted using the private key derived from the player id.
  */
 export async function loadHistoryFromNostr(
-  userPrivateKey: Uint8Array,
-  userPublicKey: string,
+  encryptionPrivateKey: Uint8Array, // Private key derived from player id
+  userPublicKey: string, // npub hex to filter events
   signal?: AbortSignal
 ): Promise<HistoryPayload | null> {
   throwIfAborted(signal);
-  const events = await pool.querySync(
-    RELAYS,
-    {
-      kinds: [KIND_HISTORY],
-      authors: [userPublicKey],
-      "#d": [D_TAG],
-      limit: 1,
-    }
-  );
+  const events = await pool.querySync(RELAYS, {
+    kinds: [KIND_APP_DATA],
+    authors: [userPublicKey],
+    "#d": [D_TAG_HISTORY],
+    limit: 1,
+  });
   throwIfAborted(signal);
 
   if (events.length === 0) {
     return null;
   }
 
-  // Get most recent event
   const latest = events.sort((a, b) => b.created_at - a.created_at)[0];
+  const payload = parseAndValidateHistoryContent(latest.content);
 
-  const payload = parseAndValidateEventContent(latest.content);
-
-  // Decrypt returns HistoryPayload with timestamp and sessionId
   return decryptHistory(
     payload.ciphertext,
     payload.ephemeralPubKey,
-    userPrivateKey
+    encryptionPrivateKey
   );
 }
 
 /**
  * Subscribe to history updates with full payload decryption
- * Returns HistoryPayload with embedded timestamp and sessionId
  */
 export function subscribeToHistoryDetailed(
   userPublicKey: string,
-  userPrivateKey: Uint8Array,
+  encryptionPrivateKey: Uint8Array, // Private key derived from player id
   onEvent: (payload: HistoryPayload) => void
 ): () => void {
   try {
     const sub = pool.subscribeMany(
       RELAYS,
       {
-        kinds: [KIND_HISTORY],
+        kinds: [KIND_APP_DATA],
         authors: [userPublicKey],
-        "#d": [D_TAG],
+        "#d": [D_TAG_HISTORY],
       },
       {
         onevent: (event) => {
           try {
-            const payload = parseAndValidateEventContent(event.content);
-
-            // decryptHistory returns HistoryPayload with timestamp and sessionId
+            const payload = parseAndValidateHistoryContent(event.content);
             const historyPayload = decryptHistory(
               payload.ciphertext,
               payload.ephemeralPubKey,
-              userPrivateKey
+              encryptionPrivateKey
             );
-
             onEvent(historyPayload);
           } catch (err) {
             console.error("Nostr history event handler failed:", err);
@@ -246,6 +374,10 @@ export function subscribeToHistoryDetailed(
   }
 }
 
+// =============================================================================
+// Merge Utilities
+// =============================================================================
+
 export interface MergeResult {
   merged: HistoryEntry[];
   addedFromCloud: number;
@@ -255,22 +387,6 @@ export interface MergeResult {
  * Merge remote history into local history.
  * Remote is the source of truth for ordering, URLs, titles, and gain.
  * Local position is preserved only when local lastPlayedAt is newer for the same URL.
- *
- * @example Position preserved when local is newer
- * ```
- * local:  [{url:"A", position:50, lastPlayedAt:"2024-01-02"}]
- * remote: [{url:"A", position:10, lastPlayedAt:"2024-01-01"}, {url:"B", position:20, lastPlayedAt:"2024-01-01"}]
- * merged: [{url:"A", position:50, lastPlayedAt:"2024-01-01"}, {url:"B", position:20, lastPlayedAt:"2024-01-01"}]
- * // URL "A": remote entry with local position (local timestamp is newer)
- * // URL "B": remote entry as-is (not in local)
- * ```
- *
- * @example Remote wins when remote is newer
- * ```
- * local:  [{url:"A", position:50, lastPlayedAt:"2024-01-01"}]
- * remote: [{url:"A", position:10, lastPlayedAt:"2024-01-02"}]
- * merged: [{url:"A", position:10, lastPlayedAt:"2024-01-02"}]
- * ```
  */
 export function mergeHistory(
   local: HistoryEntry[],
@@ -280,7 +396,6 @@ export function mergeHistory(
 
   let addedFromCloud = 0;
 
-  // Remote is the base - use remote order and entries
   const merged = remote.map((remoteEntry) => {
     const localEntry = localByUrl.get(remoteEntry.url);
     if (!localEntry) {
@@ -288,25 +403,20 @@ export function mergeHistory(
       return remoteEntry;
     }
 
-    // Same URL exists in both - check if local position should be preserved
     const localTimeParsed = new Date(localEntry.lastPlayedAt).getTime();
     const remoteTimeParsed = new Date(remoteEntry.lastPlayedAt).getTime();
 
-    // Treat invalid timestamps as -Infinity for deterministic comparison
     const localTime = Number.isFinite(localTimeParsed) ? localTimeParsed : -Infinity;
     const remoteTime = Number.isFinite(remoteTimeParsed) ? remoteTimeParsed : -Infinity;
 
-    // Both invalid: fall back to remote
     if (localTime === -Infinity && remoteTime === -Infinity) {
       return remoteEntry;
     }
 
     if (localTime > remoteTime) {
-      // Local is newer - preserve position only, use remote for everything else
       return { ...remoteEntry, position: localEntry.position };
     }
 
-    // Remote wins entirely
     return remoteEntry;
   });
 
