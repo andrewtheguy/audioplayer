@@ -391,36 +391,29 @@ Cryptographic utilities for secure sync.
 5. **No Server Trust**: Relays only see encrypted blobs
 6. **Session Ownership**: Session ID prevents simultaneous edits
 
-```
-URL: https://app.example.com/npub1abc...
-                             │
-                        parseNpub()
-                             │
-              ┌──────────────┴──────────────┐
-              ▼                             ▼
-          invalid                        valid
-    (show error, block sync)               │
-                                           ▼
-                                getSecondarySecret()
-                                           │
-                            ┌──────────────┴──────────────┐
-                            ▼                             ▼
-                       missing                        present
-                  (prompt user entry)                    │
-                                           ▼
-                                loadPlayerIdFromNostr()
-                                               │
-                              ┌────────────────┴────────────────┐
-                              ▼                                 ▼
-                      not found                              found
-                (needs nsec for setup)                         │
-                                               ▼
-                                    deriveEncryptionKey(playerId)
-                                               │
-                              ┌────────────────┴────────────────┐
-                              ▼                                 ▼
-                        privateKey                         publicKey
-                  (decrypt/sign history)              (encrypt/query history)
+```mermaid
+flowchart TD
+    URL["URL: /npub1abc..."] --> parseNpub["parseNpub()"]
+    parseNpub --> invalid["Invalid"]
+    parseNpub --> valid["Valid"]
+
+    invalid --> errorBlock["Show error, block sync"]
+
+    valid --> getSecret["getSecondarySecret()"]
+    getSecret --> missing["Missing"]
+    getSecret --> present["Present"]
+
+    missing --> promptUser["Prompt user entry"]
+
+    present --> loadPlayerId["loadPlayerIdFromNostr()"]
+    loadPlayerId --> notFound["Not found"]
+    loadPlayerId --> found["Found"]
+
+    notFound --> needsNsec["Needs nsec for setup"]
+
+    found --> deriveKey["deriveEncryptionKey(playerId)"]
+    deriveKey --> privateKey["privateKey<br/>(decrypt/sign history)"]
+    deriveKey --> publicKey["publicKey<br/>(encrypt/query history)"]
 ```
 
 ## Resilience & Error Handling
