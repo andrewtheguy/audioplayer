@@ -14,6 +14,7 @@ import {
   getNpubFingerprint,
   getSecondarySecret,
   setSecondarySecret,
+  clearSecondarySecret,
   storeNsec,
 } from "@/lib/identity";
 import {
@@ -207,8 +208,9 @@ export function useNostrSession({
         // Event exists but decrypt failed - wrong secondary secret
         setSessionStatus("needs_secret");
         setSessionNotice("Wrong secondary secret. Please re-enter.");
-        // Clear the invalid secret
+        // Clear the invalid secret from both React state and localStorage
         setSecondarySecretState(null);
+        clearSecondarySecret(fp);
         return;
       }
 
@@ -289,7 +291,9 @@ export function useNostrSession({
           return true;
         }
       } catch {
-        // Decrypt failed - wrong secret
+        // Decrypt failed - wrong secret, clear from both React state and localStorage
+        setSecondarySecretState(null);
+        clearSecondarySecret(fingerprint);
         setSessionNotice("Failed to decrypt player ID. Wrong secret?");
         setSessionStatus("needs_secret");
         return false;
