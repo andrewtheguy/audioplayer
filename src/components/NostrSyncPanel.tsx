@@ -324,7 +324,7 @@ export function NostrSyncPanel({
               Enter your secondary secret to unlock this identity.
             </div>
             <Input
-              type="text"
+              type="password"
               value={secondarySecretInput}
               onChange={(e) => setSecondarySecretInput(e.target.value)}
               placeholder="Enter secondary secret"
