@@ -140,25 +140,14 @@ export function NostrSyncPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pubkeyHex]);
 
-  const handleStartGeneration = () => {
-    // Start the generation flow - first ask for secondary secret
+  const handleStartGeneration = async () => {
+    // Generate everything at once and show credentials
     const newSecret = generateSecondarySecret();
-    setSecondarySecretInput(newSecret);
-    setGenerationStep("enter_secret");
-  };
-
-  const handleGenerateIdentity = async () => {
-    const secret = secondarySecretInput.trim();
-    if (!secret) {
-      setSessionNotice("Please enter a secondary secret.");
-      return;
-    }
-
     try {
       const identity = await generateNewIdentity();
       setGeneratedIdentity({
         ...identity,
-        secondarySecret: secret,
+        secondarySecret: newSecret,
       });
       setGenerationStep("show_credentials");
     } catch (err) {
@@ -296,53 +285,6 @@ export function NostrSyncPanel({
               className="flex-1 h-8 text-xs"
             >
               {isLoading ? "Creating..." : "I've Saved These - Continue"}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={handleCancelGeneration}
-              className="h-8 text-xs"
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      );
-    }
-
-    if (generationStep === "enter_secret") {
-      return (
-        <div className="space-y-3">
-          <div className="text-xs text-muted-foreground">
-            Enter or generate a secondary secret. This will be used to encrypt your player ID.
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Secondary Secret:</label>
-            <Input
-              type="text"
-              value={secondarySecretInput}
-              onChange={(e) => setSecondarySecretInput(e.target.value)}
-              placeholder="Enter or use generated secret"
-              className="h-8 text-xs font-mono"
-            />
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setSecondarySecretInput(generateSecondarySecret())}
-              className="h-6 text-[10px] px-2"
-            >
-              Regenerate
-            </Button>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="default"
-              onClick={handleGenerateIdentity}
-              disabled={isLoading || !secondarySecretInput.trim()}
-              className="flex-1 h-8 text-xs"
-            >
-              Generate Identity
             </Button>
             <Button
               size="sm"
@@ -501,7 +443,7 @@ export function NostrSyncPanel({
             <Button
               size="sm"
               variant="outline"
-              onClick={handleGenerateIdentity}
+              onClick={handleStartGeneration}
               className="w-full h-8 text-xs"
             >
               Generate New Identity
