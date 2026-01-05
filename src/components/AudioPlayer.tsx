@@ -11,6 +11,7 @@ import {
   saveHistory,
   type HistoryEntry,
 } from "@/lib/history";
+import { generateSessionId } from "@/lib/nostr-crypto";
 import type { SessionStatus } from "@/hooks/useNostrSession";
 
 const SAVE_INTERVAL_MS = 5000;
@@ -52,7 +53,7 @@ function normalizeTitle(value: string): string | undefined {
 }
 
 export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
-  const [sessionId] = useState(() => crypto.randomUUID());
+  const [sessionId] = useState(generateSessionId);
 
   return (
     <AudioPlayerInner

@@ -98,6 +98,18 @@ export function generatePlayerId(): string {
 }
 
 /**
+ * Generate a random session id (16 bytes = 32 hex chars)
+ * Used for multi-device coordination - simple format for interoperability
+ */
+export function generateSessionId(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
  * Validate player id format (43 URL-safe base64 characters)
  */
 export function isValidPlayerId(playerId: string): boolean {

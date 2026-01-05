@@ -9,6 +9,7 @@ import {
   isValidSecondarySecret,
   generateNostrKeypair,
   deriveEncryptionKey,
+  generateSessionId,
 } from "@/lib/nostr-crypto";
 import {
   getStorageScope,
@@ -105,7 +106,7 @@ export function useNostrSession({
   // Session state
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>("no_npub");
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
-  const [localSessionId] = useState(() => sessionId ?? crypto.randomUUID());
+  const [localSessionId] = useState(() => sessionId ?? generateSessionId());
   const [ignoreRemoteUntil, setIgnoreRemoteUntil] = useState<number>(0);
 
   const prevStatusRef = useRef<SessionStatus>(sessionStatus);
