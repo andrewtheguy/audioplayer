@@ -307,7 +307,6 @@ export class HlsAudioDecoder {
           source.onended = () => {
             if (token !== this.scheduleToken) return;
             cleanup();
-            source.buffer = null;
             if (!this.isPlaying) return;
             this.isPlaying = false;
             this.callbacks.onState(false);
@@ -316,7 +315,6 @@ export class HlsAudioDecoder {
         } else {
           source.onended = () => {
             cleanup();
-            source.buffer = null;
           };
         }
         source.start(startTime, segmentOffset);
@@ -490,13 +488,18 @@ export class HlsAudioDecoder {
 
   private async resetVodWindow(): Promise<void> {
     if (!this.isPlaying || this.mode !== "vod") return;
+    const freshCurrentTime =
+      this.startCtxTime > 0
+        ? this.startMediaTime + (this.ctx.currentTime - this.startCtxTime)
+        : this.currentTime;
+    this.currentTime = freshCurrentTime;
     const nextToken = this.scheduleToken + 1;
     this.scheduleToken = nextToken;
     this.stopSources();
     this.scheduling = false;
     this.startCtxTime = this.ctx.currentTime + START_DELAY_SECONDS;
     this.scheduleCursor = this.startCtxTime;
-    this.startScheduling(this.currentTime);
+    this.startScheduling(freshCurrentTime);
   }
 
   private async decodeSegmentWithRetry(url: string, token: number): Promise<AudioBuffer> {

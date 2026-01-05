@@ -86,25 +86,23 @@ vi.mock("mux.js", () => {
 });
 
 describe("HlsAudioDecoder", () => {
-  let originalFetch: typeof global.fetch;
-  let originalRAF: typeof global.requestAnimationFrame;
-  let originalCAF: typeof global.cancelAnimationFrame;
+  let originalFetch: typeof globalThis.fetch;
+  let originalRAF: typeof globalThis.requestAnimationFrame;
+  let originalCAF: typeof globalThis.cancelAnimationFrame;
 
   beforeEach(() => {
     vi.useRealTimers();
-    originalFetch = global.fetch;
-    originalRAF = global.requestAnimationFrame;
-    originalCAF = global.cancelAnimationFrame;
-    // @ts-expect-error test mock
-    global.requestAnimationFrame = (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0);
-    // @ts-expect-error test mock
-    global.cancelAnimationFrame = (id: number) => clearTimeout(id);
+    originalFetch = globalThis.fetch;
+    originalRAF = globalThis.requestAnimationFrame;
+    originalCAF = globalThis.cancelAnimationFrame;
+    globalThis.requestAnimationFrame = (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0);
+    globalThis.cancelAnimationFrame = (id: number) => clearTimeout(id);
   });
 
   afterEach(() => {
-    global.fetch = originalFetch;
-    global.requestAnimationFrame = originalRAF;
-    global.cancelAnimationFrame = originalCAF;
+    globalThis.fetch = originalFetch;
+    globalThis.requestAnimationFrame = originalRAF;
+    globalThis.cancelAnimationFrame = originalCAF;
     vi.restoreAllMocks();
   });
 
@@ -125,8 +123,7 @@ describe("HlsAudioDecoder", () => {
       }
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
     });
-    // @ts-expect-error test mock
-    global.fetch = fetchMock;
+    globalThis.fetch = fetchMock;
 
     const ctx = new MockAudioContext();
     const outputNode = {};
@@ -168,8 +165,7 @@ describe("HlsAudioDecoder", () => {
       }
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
     });
-    // @ts-expect-error test mock
-    global.fetch = fetchMock;
+    globalThis.fetch = fetchMock;
 
     const ctx = new MockAudioContext();
     const decoder = new HlsAudioDecoder(mediaUrl, ctx as unknown as AudioContext, {} as AudioNode, {
@@ -199,8 +195,7 @@ describe("HlsAudioDecoder", () => {
       }
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
     });
-    // @ts-expect-error test mock
-    global.fetch = fetchMock;
+    globalThis.fetch = fetchMock;
 
     const ctx = new MockAudioContext([5]);
     const onEnded = vi.fn();
@@ -236,8 +231,7 @@ describe("HlsAudioDecoder", () => {
       }
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
     });
-    // @ts-expect-error test mock
-    global.fetch = fetchMock;
+    globalThis.fetch = fetchMock;
 
     const ctx = new MockAudioContext([5]);
     const decoder = new HlsAudioDecoder(vodUrl, ctx as unknown as AudioContext, {} as AudioNode, {
