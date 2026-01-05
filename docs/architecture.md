@@ -77,7 +77,7 @@ Orchestrates cross-device synchronization by connecting session management with 
 Manages identity, player ID, and session state:
 
 - **Session Status**: Tracks `no_npub`, `needs_secret`, `loading`, `needs_setup`, `idle`, `active`, `stale`, or `invalid` status
-- **Identity Flow**: Parses npub from URL hash, validates format, derives fingerprint for localStorage scoping
+- **Identity Flow**: Parses npub from URL path (`/:npub`), validates format, derives fingerprint for localStorage scoping
 - **Secondary Secret**: Checks localStorage for cached secret, prompts user if missing
 - **Player ID Loading**: Fetches encrypted player ID from relay, decrypts with secondary secret
 - **Setup Flow**: If no player ID exists, requires nsec to create initial one
@@ -88,7 +88,7 @@ Manages identity, player ID, and session state:
 **Key actions:**
 - `submitSecondarySecret(secret)`: Stores secret, attempts to load player ID from relay
 - `setupWithNsec(nsec)`: Creates new player ID, encrypts with secondary secret, signs and publishes
-- `rotatePlayerId(nsec)`: Generates new player ID (old history becomes inaccessible)
+- `rotatePlayerId(nsec)`: Generates new player ID (no migration; old history becomes inaccessible)
 - `generateNewIdentity()`: Creates new npub/nsec pair
 
 ### useNostrSync (`hooks/useNostrSync.ts`)
@@ -150,9 +150,11 @@ Page Load Flow:
 ───────────────
   No npub in URL → "no_npub"
        ↓
-  [Generate New Identity] → show credentials → enter secret
+  [Generate New Identity] → show credentials → confirm setup
        ↓
-  npub set in URL hash → "needs_secret"
+  `setupWithNsec()` publishes player ID and navigates to `/:npub`
+       ↓
+  "loading" → "idle"
 
   npub in URL (invalid format) → "invalid" (error shown)
 
@@ -174,7 +176,8 @@ Page Load Flow:
 
 State Transitions:
 ──────────────────
-  no_npub ──[Generate Identity]──▶ (show credentials) ──▶ needs_secret
+  no_npub ──[Navigate to `/:npub` w/o cached secret]──▶ needs_secret
+  no_npub ──[Generate Identity + setup]──▶ loading ──▶ idle
   needs_secret ──[Submit Secret, found player ID]──▶ idle
   needs_secret ──[Submit Secret, no player ID]──▶ needs_setup
   needs_setup ──[Setup with nsec]──▶ idle
@@ -189,10 +192,11 @@ State Transitions:
 
 | Transition | Trigger | Mechanism |
 |------------|---------|-----------|
-| `no_npub` → `needs_secret` | User clicks "Generate New Identity" | `generateNewIdentity()` creates npub/nsec, sets URL hash |
+| `no_npub` → `needs_secret` | User navigates to `/:npub` without a cached secondary secret | URL param parsed on load |
+| `no_npub` → `loading` | User confirms generated identity setup | `setupWithNsec()` publishes player ID |
 | `needs_secret` → `loading` | User submits secondary secret | `submitSecondarySecret()` stores secret, fetches player ID |
 | `loading` → `idle` | Player ID decrypted successfully | `loadPlayerIdFromNostr()` returns valid player ID |
-| `loading` → `needs_setup` | No player ID event exists | `checkPlayerIdEventExists()` returns false |
+| `loading` → `needs_setup` | No player ID event exists | `loadPlayerIdFromNostr()` returns null |
 | `needs_setup` → `idle` | User enters nsec | `setupWithNsec()` creates and publishes player ID |
 | `idle` → `active` | User clicks "Start Session" | `startSession()` publishes with new sessionId, starts 15s grace period |
 | `active` → `stale` | Remote event with different sessionId | `subscribeToHistoryDetailed()` detects foreign sessionId in payload |
@@ -247,7 +251,6 @@ All localStorage keys are scoped by npub fingerprint for isolation:
 | Key Pattern | Description |
 |-------------|-------------|
 | `com.audioplayer.secondary-secret.{fingerprint}` | Secondary secret for this npub |
-| `com.audioplayer.nsec.{fingerprint}` | Optional stored nsec (user convenience) |
 | `com.audioplayer.history.v1.{fingerprint}` | History payload (entries + timestamp + sessionId) |
 
 The fingerprint is a 32-character hex string (first 128 bits of SHA-256 hash of the pubkeyHex).
@@ -257,8 +260,8 @@ The fingerprint is a 32-character hex string (first 128 bits of SHA-256 hash of 
 - `getStorageScope(pubkeyHex)`: Generates 32-char hex fingerprint from pubkey for localStorage scoping (async, uses SubtleCrypto)
 - `getSecondarySecret(fingerprint)`: Retrieves secondary secret from localStorage
 - `setSecondarySecret(fingerprint, secret)`: Stores secondary secret
-- `getStoredNsec(fingerprint)`: Retrieves optional stored nsec
-- `storeNsec(fingerprint, nsec)`: Stores nsec for convenience
+- `clearSecondarySecret(fingerprint)`: Clears secondary secret from localStorage
+- `getHistoryStorageKey(fingerprint)`: Builds scoped history storage key
 - `clearAllIdentityData(fingerprint)`: Clears all data for a fingerprint
 
 **Note:** Player ID is NOT cached locally - it's always fetched from relay using the secondary secret.
@@ -297,7 +300,6 @@ Nostr protocol integration for cloud sync.
 
 **Relays used:**
 - wss://nos.lol
-- wss://relay.nostr.band
 - wss://relay.nostr.net
 - wss://relay.primal.net
 - wss://relay.snort.social

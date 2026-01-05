@@ -28,7 +28,7 @@ A web-based audio player supporting standard audio formats and HLS streaming, bu
 
 The application uses a layered key architecture:
 
-1. **npub (public)** - Nostr public key in URL hash, safe to share
+1. **npub (public)** - Nostr public key in the URL path (`/:npub`), safe to share
 2. **Secondary Secret (per-device)** - User-entered secret stored in localStorage, encrypts the player ID
 3. **Player ID (on relay)** - Encrypted with secondary secret, signed by nsec, used to derive history encryption keys
 4. **nsec (private)** - Only needed for initial setup and player ID rotation
@@ -37,7 +37,7 @@ The application uses a layered key architecture:
 - The npub URL is shareable - it only identifies the user, not their data
 - Secondary secret must be transferred manually between devices (not in URL)
 - History is encrypted with keys derived from player ID (NIP-44 encryption)
-- Player ID rotation creates a fresh start (old history becomes inaccessible)
+- Player ID rotation generates new keys; old history becomes inaccessible unless you migrate it (Settings can migrate by default)
 - Encryption prevents casual snooping on Nostr relays
 
 **Limitations:**
