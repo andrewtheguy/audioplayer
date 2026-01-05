@@ -42,8 +42,8 @@ export function NostrSyncPanel({
   const [nsecInput, setNsecInput] = useState("");
   const [generatedIdentity, setGeneratedIdentity] = useState<{ npub: string; nsec: string; secondarySecret: string } | null>(null);
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
-  // Generation flow: "enter_secret" -> "show_credentials" -> done
-  const [generationStep, setGenerationStep] = useState<"enter_secret" | "show_credentials" | null>(null);
+  // Generation flow: show_credentials -> done
+  const [generationStep, setGenerationStep] = useState<"show_credentials" | null>(null);
 
   const {
     npub,
