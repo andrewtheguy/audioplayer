@@ -35,7 +35,7 @@ export function NostrSyncPanel({
   isPlayingRef,
 }: NostrSyncPanelProps) {
   const navigate = useNavigate();
-  const { npub: npubParam } = useParams<{ npub: string }>();
+  const { npub: npubParam } = useParams<{ npub?: string }>();
 
   const [showDetails, setShowDetails] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);

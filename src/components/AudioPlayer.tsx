@@ -521,13 +521,18 @@ function AudioPlayerInner({
 
   // Validate audio stream by checking content-type or file extension
   const validateAudioSource = async (urlString: string): Promise<{ valid: boolean; error?: string }> => {
-    // Check common audio file extensions first
+    // Check common audio file extensions in pathname (not query/hash)
     const audioExtensions = [".mp3", ".m4a", ".aac", ".ogg", ".wav", ".flac", ".opus", ".m3u8", ".m3u"];
-    const urlLower = urlString.toLowerCase();
-    const hasAudioExtension = audioExtensions.some((ext) => urlLower.includes(ext));
+    try {
+      const parsed = new URL(urlString);
+      const pathnameLower = parsed.pathname.toLowerCase();
+      const hasAudioExtension = audioExtensions.some((ext) => pathnameLower.endsWith(ext));
 
-    if (hasAudioExtension) {
-      return { valid: true };
+      if (hasAudioExtension) {
+        return { valid: true };
+      }
+    } catch {
+      // URL parsing failed - continue to HEAD request validation
     }
 
     // For URLs without clear audio extension, try HEAD request
@@ -1065,10 +1070,10 @@ function AudioPlayerInner({
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder="Enter audio URL"
-                  onKeyDown={(e) => e.key === "Enter" && !isViewOnly && loadStream()}
+                  onKeyDown={(e) => e.key === "Enter" && !isViewOnly && void loadStream()}
                   disabled={isViewOnly}
                 />
-                <Button onClick={() => loadStream()} disabled={isViewOnly}>Load</Button>
+                <Button onClick={() => void loadStream()} disabled={isViewOnly}>Load</Button>
                 {nowPlayingUrl && (
                   <Button
                     variant="ghost"
