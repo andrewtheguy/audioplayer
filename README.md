@@ -14,19 +14,36 @@ A web-based audio player supporting standard audio formats and HLS streaming, bu
   - Copy URL to clipboard
   - Delete individual entries or clear all
   - Collapsible history list
-  - History is scoped by session secret (different secrets = isolated histories)
+  - History is scoped by npub identity (different npubs = isolated histories)
 - **Position Persistence** - Saves playback position every 5 seconds while playing (non-live streams)
 - **Now Playing** - Displays currently loaded stream URL
 - **Cross-Device Sync** - Sync playback history via Nostr protocol
-  - End-to-end encrypted history storage
+  - End-to-end encrypted history storage using player ID derived keys
+  - npub-based identity with shareable URLs
+  - Per-device secondary secret for player ID encryption
   - Session ownership with explicit takeovers (active sessions become stale when another device claims the session)
   - Auto-save with debouncing
 
-## Security Note
+## Identity & Security Model
 
-Security is not a priority for this application. The playlist history is expected to be disposable and essentially public when the shareable playlist URL (the one you copy/share that contains the `#` fragment) is shared. The "secret" is the playlist identifier/access token stored in the URL fragment. The fragment is kept client-side and is not sent to relays or servers in HTTP requests; Nostr keys and relay URLs are separate and are not stored in the fragment. If someone gets the shareable URL, they can see or modify only the playlist audio URLs and playback positions—do not store anything sensitive in this app.
+The application uses a layered key architecture:
 
-The encryption exists primarily to prevent casual snooping on Nostr relays, not to protect sensitive data. Do not use this application to store or sync anything confidential.
+1. **npub (public)** - Nostr public key in URL hash, safe to share
+2. **Secondary Secret (per-device)** - User-entered secret stored in localStorage, encrypts the player ID
+3. **Player ID (on relay)** - Encrypted with secondary secret, signed by nsec, used to derive history encryption keys
+4. **nsec (private)** - Only needed for initial setup and player ID rotation
+
+**Security characteristics:**
+- The npub URL is shareable - it only identifies the user, not their data
+- Secondary secret must be transferred manually between devices (not in URL)
+- History is encrypted with keys derived from player ID (NIP-44 encryption)
+- Player ID rotation creates a fresh start (old history becomes inaccessible)
+- Encryption prevents casual snooping on Nostr relays
+
+**Limitations:**
+- This is not a high-security application - the playlist history is considered disposable
+- XSS attacks on the same origin could potentially use stored keys
+- Do not store sensitive information in playlist entries
 
 ## Tech Stack
 

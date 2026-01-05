@@ -1,22 +1,24 @@
 import { describe, it, expect } from "vitest";
 import {
-  generateSecret,
-  isValidSecret,
-  deriveNostrKeys,
+  generateSecondarySecret,
+  isValidSecondarySecret,
+  generatePlayerId,
+  isValidPlayerId,
+  deriveEncryptionKey,
   encryptHistory,
   decryptHistory,
 } from "./nostr-crypto";
 import type { HistoryEntry } from "./history";
 
-describe("generateSecret", () => {
+describe("generateSecondarySecret", () => {
   it("generates a 16-character string", () => {
-    const secret = generateSecret();
+    const secret = generateSecondarySecret();
     expect(secret).toHaveLength(16);
   });
 
   it("generates URL-safe base64 (no +, /, or =)", () => {
     for (let i = 0; i < 100; i++) {
-      const secret = generateSecret();
+      const secret = generateSecondarySecret();
       expect(secret).not.toMatch(/[+/=]/);
       expect(secret).toMatch(/^[A-Za-z0-9_-]+$/);
     }
@@ -25,45 +27,45 @@ describe("generateSecret", () => {
   it("generates unique secrets", () => {
     const secrets = new Set<string>();
     for (let i = 0; i < 1000; i++) {
-      secrets.add(generateSecret());
+      secrets.add(generateSecondarySecret());
     }
     expect(secrets.size).toBe(1000);
   });
 
   it("generates secrets that pass validation", () => {
     for (let i = 0; i < 100; i++) {
-      const secret = generateSecret();
-      expect(isValidSecret(secret)).toBe(true);
+      const secret = generateSecondarySecret();
+      expect(isValidSecondarySecret(secret)).toBe(true);
     }
   });
 });
 
-describe("isValidSecret", () => {
+describe("isValidSecondarySecret", () => {
   it("returns true for valid generated secrets", () => {
-    const secret = generateSecret();
-    expect(isValidSecret(secret)).toBe(true);
+    const secret = generateSecondarySecret();
+    expect(isValidSecondarySecret(secret)).toBe(true);
   });
 
   it("returns false for wrong length strings", () => {
-    expect(isValidSecret("")).toBe(false);
-    expect(isValidSecret("abc")).toBe(false);
-    expect(isValidSecret("abcdefghijklmno")).toBe(false); // 15 chars
-    expect(isValidSecret("abcdefghijklmnopq")).toBe(false); // 17 chars
+    expect(isValidSecondarySecret("")).toBe(false);
+    expect(isValidSecondarySecret("abc")).toBe(false);
+    expect(isValidSecondarySecret("abcdefghijklmno")).toBe(false); // 15 chars
+    expect(isValidSecondarySecret("abcdefghijklmnopq")).toBe(false); // 17 chars
   });
 
   it("returns false for non-string values", () => {
-    expect(isValidSecret(null as unknown as string)).toBe(false);
-    expect(isValidSecret(undefined as unknown as string)).toBe(false);
-    expect(isValidSecret(123 as unknown as string)).toBe(false);
-    expect(isValidSecret({} as unknown as string)).toBe(false);
+    expect(isValidSecondarySecret(null as unknown as string)).toBe(false);
+    expect(isValidSecondarySecret(undefined as unknown as string)).toBe(false);
+    expect(isValidSecondarySecret(123 as unknown as string)).toBe(false);
+    expect(isValidSecondarySecret({} as unknown as string)).toBe(false);
   });
 
   it("returns false for invalid base64 characters", () => {
-    expect(isValidSecret("!!!!!!!!!!!!!!!!")).toBe(false); // 16 invalid chars
+    expect(isValidSecondarySecret("!!!!!!!!!!!!!!!!")).toBe(false); // 16 invalid chars
   });
 
   it("detects single character typos (checksum validation)", () => {
-    const secret = generateSecret();
+    const secret = generateSecondarySecret();
     const chars = secret.split("");
 
     // Flip one character and verify checksum fails
@@ -73,7 +75,7 @@ describe("isValidSecret", () => {
       // Change to a different valid base64 character
       modified[i] = modified[i] === "A" ? "B" : "A";
       const tamperedSecret = modified.join("");
-      if (!isValidSecret(tamperedSecret)) {
+      if (!isValidSecondarySecret(tamperedSecret)) {
         typoDetected++;
       }
     }
@@ -85,13 +87,13 @@ describe("isValidSecret", () => {
   it("detects transposed characters", () => {
     let detected = 0;
     for (let trial = 0; trial < 50; trial++) {
-      const secret = generateSecret();
+      const secret = generateSecondarySecret();
       const chars = secret.split("");
       // Swap adjacent characters
       if (chars[0] !== chars[1]) {
         [chars[0], chars[1]] = [chars[1], chars[0]];
         const swapped = chars.join("");
-        if (!isValidSecret(swapped)) {
+        if (!isValidSecondarySecret(swapped)) {
           detected++;
         }
       }
@@ -101,59 +103,97 @@ describe("isValidSecret", () => {
   });
 });
 
-describe("deriveNostrKeys", () => {
-  it("derives consistent keys from the same secret", async () => {
-    const secret = generateSecret();
-    const keys1 = await deriveNostrKeys(secret);
-    const keys2 = await deriveNostrKeys(secret);
+describe("generatePlayerId", () => {
+  it("generates a 43-character URL-safe base64 string", () => {
+    const playerId = generatePlayerId();
+    expect(playerId).toHaveLength(43);
+    expect(playerId).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  it("generates unique player IDs", () => {
+    const ids = new Set<string>();
+    for (let i = 0; i < 100; i++) {
+      ids.add(generatePlayerId());
+    }
+    expect(ids.size).toBe(100);
+  });
+
+  it("generates player IDs that pass validation", () => {
+    for (let i = 0; i < 100; i++) {
+      const playerId = generatePlayerId();
+      expect(isValidPlayerId(playerId)).toBe(true);
+    }
+  });
+});
+
+describe("isValidPlayerId", () => {
+  it("returns true for valid generated player IDs", () => {
+    const playerId = generatePlayerId();
+    expect(isValidPlayerId(playerId)).toBe(true);
+  });
+
+  it("returns false for wrong length strings", () => {
+    expect(isValidPlayerId("")).toBe(false);
+    expect(isValidPlayerId("abc")).toBe(false);
+    expect(isValidPlayerId("a".repeat(42))).toBe(false); // 42 chars
+    expect(isValidPlayerId("a".repeat(44))).toBe(false); // 44 chars
+  });
+
+  it("returns false for non-URL-safe-base64 characters", () => {
+    expect(isValidPlayerId("+".repeat(43))).toBe(false); // + is not URL-safe
+    expect(isValidPlayerId("/".repeat(43))).toBe(false); // / is not URL-safe
+    expect(isValidPlayerId("=".repeat(43))).toBe(false); // = is padding
+  });
+
+  it("returns false for non-string values", () => {
+    expect(isValidPlayerId(null as unknown as string)).toBe(false);
+    expect(isValidPlayerId(undefined as unknown as string)).toBe(false);
+    expect(isValidPlayerId(123 as unknown as string)).toBe(false);
+  });
+});
+
+describe("deriveEncryptionKey", () => {
+  it("derives consistent keys from the same player ID", async () => {
+    const playerId = generatePlayerId();
+    const keys1 = await deriveEncryptionKey(playerId);
+    const keys2 = await deriveEncryptionKey(playerId);
 
     expect(keys1.publicKey).toBe(keys2.publicKey);
     expect(keys1.privateKey).toEqual(keys2.privateKey);
   });
 
-  it("derives different keys from different secrets", async () => {
-    const secret1 = generateSecret();
-    const secret2 = generateSecret();
-    const keys1 = await deriveNostrKeys(secret1);
-    const keys2 = await deriveNostrKeys(secret2);
+  it("derives different keys from different player IDs", async () => {
+    const playerId1 = generatePlayerId();
+    const playerId2 = generatePlayerId();
+    const keys1 = await deriveEncryptionKey(playerId1);
+    const keys2 = await deriveEncryptionKey(playerId2);
 
     expect(keys1.publicKey).not.toBe(keys2.publicKey);
   });
 
   it("produces valid 64-character hex public keys", async () => {
-    const secret = generateSecret();
-    const keys = await deriveNostrKeys(secret);
+    const playerId = generatePlayerId();
+    const keys = await deriveEncryptionKey(playerId);
 
     expect(keys.publicKey).toHaveLength(64);
     expect(keys.publicKey).toMatch(/^[0-9a-f]+$/);
   });
 
   it("produces 32-byte private keys", async () => {
-    const secret = generateSecret();
-    const keys = await deriveNostrKeys(secret);
+    const playerId = generatePlayerId();
+    const keys = await deriveEncryptionKey(playerId);
 
     expect(keys.privateKey).toBeInstanceOf(Uint8Array);
     expect(keys.privateKey.length).toBe(32);
   });
 
-  it("throws on empty secret", async () => {
-    await expect(deriveNostrKeys("")).rejects.toThrow("Secret cannot be empty");
+  it("throws on empty player ID", async () => {
+    await expect(deriveEncryptionKey("")).rejects.toThrow("Player ID cannot be empty");
   });
 
-  it("throws on invalid secret format", async () => {
-    await expect(deriveNostrKeys("tooshort")).rejects.toThrow(
-      "Invalid secret format or checksum"
-    );
-  });
-
-  it("throws on invalid checksum", async () => {
-    const secret = generateSecret();
-    // Flip one character to break checksum
-    const chars = secret.split("");
-    chars[0] = chars[0] === "A" ? "B" : "A";
-    const badSecret = chars.join("");
-    await expect(deriveNostrKeys(badSecret)).rejects.toThrow(
-      "Invalid secret format or checksum"
+  it("throws on invalid player ID format", async () => {
+    await expect(deriveEncryptionKey("tooshort")).rejects.toThrow(
+      "Invalid player ID format"
     );
   });
 });
@@ -175,8 +215,8 @@ describe("encryptHistory / decryptHistory", () => {
   ];
 
   it("round-trips history data correctly", async () => {
-    const secret = generateSecret();
-    const keys = await deriveNostrKeys(secret);
+    const playerId = generatePlayerId();
+    const keys = await deriveEncryptionKey(playerId);
     const sessionId = "test-session-123";
 
     const encrypted = encryptHistory(sampleHistory, keys.publicKey, sessionId);
@@ -196,10 +236,10 @@ describe("encryptHistory / decryptHistory", () => {
   });
 
   it("fails decryption with wrong private key", async () => {
-    const secret1 = generateSecret();
-    const secret2 = generateSecret();
-    const keys1 = await deriveNostrKeys(secret1);
-    const keys2 = await deriveNostrKeys(secret2);
+    const playerId1 = generatePlayerId();
+    const playerId2 = generatePlayerId();
+    const keys1 = await deriveEncryptionKey(playerId1);
+    const keys2 = await deriveEncryptionKey(playerId2);
 
     const encrypted = encryptHistory(sampleHistory, keys1.publicKey);
 
@@ -209,12 +249,12 @@ describe("encryptHistory / decryptHistory", () => {
         encrypted.ephemeralPubKey,
         keys2.privateKey
       )
-    ).toThrow(/Decryption failed.*Wrong Secret/);
+    ).toThrow(/Decryption failed.*Wrong player ID/);
   });
 
   it("produces different ciphertext each time (ephemeral keys)", async () => {
-    const secret = generateSecret();
-    const keys = await deriveNostrKeys(secret);
+    const playerId = generatePlayerId();
+    const keys = await deriveEncryptionKey(playerId);
 
     const encrypted1 = encryptHistory(sampleHistory, keys.publicKey);
     const encrypted2 = encryptHistory(sampleHistory, keys.publicKey);
@@ -224,8 +264,8 @@ describe("encryptHistory / decryptHistory", () => {
   });
 
   it("handles empty history array", async () => {
-    const secret = generateSecret();
-    const keys = await deriveNostrKeys(secret);
+    const playerId = generatePlayerId();
+    const keys = await deriveEncryptionKey(playerId);
 
     const encrypted = encryptHistory([], keys.publicKey);
     const decrypted = decryptHistory(

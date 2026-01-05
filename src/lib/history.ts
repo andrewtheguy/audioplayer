@@ -1,30 +1,6 @@
-export const STORAGE_KEY = "com.audioplayer.history.v1";
-export const HISTORY_TIMESTAMP_KEY = "com.audioplayer.history.timestamp";
-export const LAST_USED_SECRET_KEY = "com.audioplayer.session.last_used_secret";
+import { getHistoryStorageKey } from "./identity";
+
 export const MAX_HISTORY_ENTRIES = 100;
-
-/**
- * Generate a storage-key-safe fingerprint from a secret.
- * Returns 16 hex characters (first 64 bits of SHA-256 hash).
- */
-export async function getStorageFingerprint(secret: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(secret);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray
-    .slice(0, 8)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function getHistoryStorageKey(fingerprint?: string): string {
-  return fingerprint ? `${STORAGE_KEY}.${fingerprint}` : STORAGE_KEY;
-}
-
-export function getTimestampStorageKey(fingerprint?: string): string {
-  return fingerprint ? `${HISTORY_TIMESTAMP_KEY}.${fingerprint}` : HISTORY_TIMESTAMP_KEY;
-}
 
 export interface HistoryEntry {
   url: string;
@@ -87,50 +63,93 @@ function trimHistory(history: HistoryEntry[]): HistoryEntry[] {
   return history.slice(0, MAX_HISTORY_ENTRIES);
 }
 
-export function getHistory(fingerprint?: string): HistoryEntry[] {
+/**
+ * Validate that a value is a valid HistoryPayload
+ */
+function isValidHistoryPayload(value: unknown): value is HistoryPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const payload = value as Record<string, unknown>;
+  return (
+    Array.isArray(payload.history) &&
+    typeof payload.timestamp === "number" &&
+    (payload.sessionId === undefined || typeof payload.sessionId === "string")
+  );
+}
+
+/**
+ * Get history payload from localStorage (atomic: history + timestamp together)
+ * Returns null if no history exists or on parse error
+ */
+function getHistoryPayload(fingerprint: string | undefined): HistoryPayload | null {
+  if (!fingerprint) return null;
   try {
     const key = getHistoryStorageKey(fingerprint);
     const data = localStorage.getItem(key);
-    if (!data) return [];
+    if (!data) return null;
 
-    const parsed = JSON.parse(data);
-    const validated = validateHistoryArray(parsed);
+    const parsed: unknown = JSON.parse(data);
 
-    // Ensure we never return more than MAX_HISTORY_ENTRIES
-    return trimHistory(validated);
+    // Handle new format (HistoryPayload object)
+    if (isValidHistoryPayload(parsed)) {
+      const validated = validateHistoryArray(parsed.history);
+      return {
+        history: trimHistory(validated),
+        timestamp: parsed.timestamp,
+        sessionId: parsed.sessionId,
+      };
+    }
+
+    // Handle legacy format (plain array) - migrate on read
+    if (Array.isArray(parsed)) {
+      const validated = validateHistoryArray(parsed);
+      return {
+        history: trimHistory(validated),
+        timestamp: Date.now(),
+      };
+    }
+
+    console.warn("Unknown history format in localStorage");
+    return null;
   } catch (err) {
     console.warn("Failed to parse history from localStorage:", err);
-    return [];
-  }
-}
-
-export function saveHistory(history: HistoryEntry[], fingerprint?: string): void {
-  try {
-    const historyKey = getHistoryStorageKey(fingerprint);
-    const timestampKey = getTimestampStorageKey(fingerprint);
-    // Trim to MAX_HISTORY_ENTRIES before saving (keeps most recent)
-    const trimmed = trimHistory(history);
-    localStorage.setItem(historyKey, JSON.stringify(trimmed));
-    localStorage.setItem(timestampKey, Date.now().toString());
-  } catch (err) {
-    // Storage full or unavailable
-    console.warn("Failed to save history to localStorage:", err);
-  }
-}
-
-export function getLastUsedSecret(): string | null {
-  try {
-    return localStorage.getItem(LAST_USED_SECRET_KEY) || null;
-  } catch (err) {
-    console.warn("Failed to get last used secret:", err);
     return null;
   }
 }
 
-export function saveLastUsedSecret(secret: string): void {
+/**
+ * Get history entries from localStorage
+ */
+export function getHistory(fingerprint: string | undefined): HistoryEntry[] {
+  return getHistoryPayload(fingerprint)?.history ?? [];
+}
+
+/**
+ * Get the timestamp when history was last saved
+ * Returns null if no history exists
+ */
+export function getHistoryTimestamp(fingerprint: string | undefined): number | null {
+  return getHistoryPayload(fingerprint)?.timestamp ?? null;
+}
+
+/**
+ * Save history payload to localStorage (atomic: history + timestamp together)
+ */
+export function saveHistory(
+  history: HistoryEntry[],
+  fingerprint: string | undefined,
+  sessionId?: string
+): void {
+  if (!fingerprint) return;
   try {
-    localStorage.setItem(LAST_USED_SECRET_KEY, secret);
+    const key = getHistoryStorageKey(fingerprint);
+    const trimmed = trimHistory(history);
+    const payload: HistoryPayload = {
+      history: trimmed,
+      timestamp: Date.now(),
+      sessionId,
+    };
+    localStorage.setItem(key, JSON.stringify(payload));
   } catch (err) {
-    console.warn("Failed to save last used secret:", err);
+    console.warn("Failed to save history to localStorage:", err);
   }
 }

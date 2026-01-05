@@ -5,12 +5,14 @@ import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { NostrSyncPanel } from "./NostrSyncPanel";
 import {
-  getTimestampStorageKey,
   MAX_HISTORY_ENTRIES,
   getHistory,
+  getHistoryTimestamp,
   saveHistory,
   type HistoryEntry,
 } from "@/lib/history";
+import { generateSessionId } from "@/lib/nostr-crypto";
+import type { SessionStatus } from "@/hooks/useNostrSession";
 
 const SAVE_INTERVAL_MS = 5000;
 
@@ -51,7 +53,7 @@ function normalizeTitle(value: string): string | undefined {
 }
 
 export function AudioPlayer({ initialUrl = "" }: AudioPlayerProps) {
-  const [sessionId] = useState(() => crypto.randomUUID());
+  const [sessionId] = useState(generateSessionId);
 
   return (
     <AudioPlayerInner
@@ -100,7 +102,7 @@ function AudioPlayerInner({
   const [gainEnabled, setGainEnabled] = useState(false);
   const [gain, setGain] = useState(1); // 1 = 100%
   const [isViewOnly, setIsViewOnly] = useState(false);
-  const [actualSessionStatus, setActualSessionStatus] = useState<"idle" | "active" | "stale" | "invalid" | "unknown">("unknown");
+  const [actualSessionStatus, setActualSessionStatus] = useState<SessionStatus>("no_npub");
   const [editingUrl, setEditingUrl] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [showLoadInputs, setShowLoadInputs] = useState(true);
@@ -824,12 +826,9 @@ function AudioPlayerInner({
         const pausedAt = pausedAtTimestampRef.current;
         if (pausedAt === null) return;
 
-        // Get the localStorage history timestamp (scoped by fingerprint)
-        const timestampKey = getTimestampStorageKey(fingerprintRef.current);
-        const storedTimestamp = localStorage.getItem(timestampKey);
-        if (!storedTimestamp) return;
-
-        const historyUpdatedAt = parseInt(storedTimestamp, 10);
+        // Get the history timestamp (atomic with history data)
+        const historyUpdatedAt = getHistoryTimestamp(fingerprintRef.current);
+        if (historyUpdatedAt === null) return;
 
         // If history was updated after we paused, reload it
         if (historyUpdatedAt > pausedAt) {
@@ -899,15 +898,11 @@ function AudioPlayerInner({
   }, [nowPlayingUrl, nowPlayingTitle]);
 
   const showLiveCta = isLiveStream && !isPlaying;
-  const handleSessionStatusChange = useCallback((status: "idle" | "active" | "stale" | "invalid" | "unknown") => {
+  const handleSessionStatusChange = useCallback((status: SessionStatus) => {
     // View-only states: disable controls and unmount audio element
-    // - unknown: no secret in URL, view-only until user starts or resumes a session
-    // - idle: arrived with valid secret, view synced history (no resources to cleanup - just loaded)
-    // - stale: another device took over, must cleanup resources before becoming view-only
-    // - invalid: bad checksum on load, nothing ever loaded (no resources to cleanup)
-    // Note: unknown, idle, and invalid can only be reached from states without active resources,
-    // so cleanup is only needed for stale (the active→stale transition).
-    setIsViewOnly(status === "stale" || status === "idle" || status === "invalid" || status === "unknown");
+    // Only "active" allows full interaction
+    const viewOnlyStatuses: SessionStatus[] = ["no_npub", "needs_secret", "loading", "needs_setup", "idle", "stale", "invalid"];
+    setIsViewOnly(viewOnlyStatuses.includes(status));
     setActualSessionStatus(status);
     if (status === "stale") {
       // Cleanup resources before transitioning to view-only mode
@@ -1012,9 +1007,21 @@ function AudioPlayerInner({
         </div>
       )}
 
-      {actualSessionStatus === "unknown" ? (
+      {actualSessionStatus === "no_npub" ? (
         <div className="text-sm text-muted-foreground bg-muted/50 border border-border p-3 rounded-md">
-          No active session. Start or resume a session to enable controls.
+          No identity. Generate a new identity to start.
+        </div>
+      ) : actualSessionStatus === "needs_secret" ? (
+        <div className="text-sm text-amber-700 bg-amber-500/10 border border-amber-500/20 p-3 rounded-md">
+          Enter your secondary secret to unlock this identity.
+        </div>
+      ) : actualSessionStatus === "needs_setup" ? (
+        <div className="text-sm text-purple-700 bg-purple-500/10 border border-purple-500/20 p-3 rounded-md">
+          Setup required. Enter your nsec to create a player ID.
+        </div>
+      ) : actualSessionStatus === "loading" ? (
+        <div className="text-sm text-muted-foreground bg-muted/50 border border-border p-3 rounded-md">
+          Loading...
         </div>
       ) : actualSessionStatus === "stale" ? (
         <div className="text-sm text-amber-700 bg-amber-500/10 border border-amber-500/20 p-3 rounded-md">
@@ -1022,11 +1029,11 @@ function AudioPlayerInner({
         </div>
       ) : actualSessionStatus === "idle" ? (
         <div className="text-sm text-blue-700 bg-blue-500/10 border border-blue-500/20 p-3 rounded-md">
-          Viewing mode. Start a session to enable controls.
+          Ready. Start a session to enable controls.
         </div>
       ) : actualSessionStatus === "invalid" ? (
         <div className="text-sm text-red-700 bg-red-500/10 border border-red-500/20 p-3 rounded-md">
-          Invalid secret link. Check for typos or generate a new one.
+          Invalid npub format. Check URL or generate a new identity.
         </div>
       ) : (
         error && (
