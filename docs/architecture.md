@@ -4,13 +4,47 @@
 
 This is an audio player built with React and TypeScript that supports cross-device synchronization via the Nostr protocol. The application allows users to play standard audio files and HLS streams, track playback history, and sync their listening position across multiple devices using encrypted Nostr events.
 
+## Key Architecture
+
+The application uses a layered key architecture for identity and encryption:
+
+```
+URL: #npub1abc...xyz
+        │
+        ▼
+┌──────────────────┐
+│  Secondary       │  (user-entered per device, stored in localStorage)
+│  Secret          │  (encrypts player ID using AES-GCM)
+└──────────────────┘
+        │
+        ▼
+┌──────────────────┐
+│  Player ID       │  (on relay: encrypted with secondary secret, signed by nsec)
+│                  │  (fetched from relay on each session start)
+│                  │  (derives keys for history encryption AND signing)
+└──────────────────┘
+        │
+        ▼
+┌──────────────────┐
+│  Encrypted       │  (Kind 30078, d-tag: audioplayer-history-v1)
+│  History         │  (encrypted AND signed with player ID derived keys)
+└──────────────────┘
+```
+
+**Key points:**
+- **npub**: Public, safe to share in URL - identifies the user
+- **Secondary secret**: User-controlled, encrypts player ID only, must be transferred manually between devices
+- **Player ID**: 32 bytes hex, fetched from relay (not cached locally), derives keys for history
+- **nsec**: Only needed for initial setup and player ID rotation (signs player ID events)
+- **History events**: Authored by player ID public key (not npub), encrypted with player ID derived keys
+
 ## Tech Stack
 
 - **Frontend**: React 19, TypeScript, Vite
 - **Styling**: Tailwind CSS, shadcn/ui components
 - **HLS Playback**: hls.js
 - **Sync Protocol**: Nostr (nostr-tools)
-- **Encryption**: NIP-44 (for encrypted payloads)
+- **Encryption**: NIP-44 (for history), AES-GCM (for player ID)
 
 ## Core Components
 
@@ -40,14 +74,22 @@ Orchestrates cross-device synchronization by connecting session management with 
 
 ### useNostrSession (`hooks/useNostrSession.ts`)
 
-Manages session state and takeover grace periods:
+Manages identity, player ID, and session state:
 
-- **Session Status**: Tracks `idle`, `active`, `stale`, `invalid`, or `unknown` status
-- **Secret Validation**: Validates URL hash checksum on load via `isValidSecret()` for fail-fast typo detection
-- **Initial State**: On page load, state is one of: `idle` (valid secret present), `invalid` (bad checksum), or `unknown` (no secret)
-- **Bootstrap Paths**: `unknown` → `idle` → `active` (generate secret, then start session) or `idle` → `active` (start session with existing secret)
+- **Session Status**: Tracks `no_npub`, `needs_secret`, `loading`, `needs_setup`, `idle`, `active`, `stale`, or `invalid` status
+- **Identity Flow**: Parses npub from URL hash, validates format, derives fingerprint for localStorage scoping
+- **Secondary Secret**: Checks localStorage for cached secret, prompts user if missing
+- **Player ID Loading**: Fetches encrypted player ID from relay, decrypts with secondary secret
+- **Setup Flow**: If no player ID exists, requires nsec to create initial one
+- **Key Derivation**: Derives encryption keys from player ID via HKDF-SHA256
 - **Takeover Grace**: Provides `ignoreRemoteUntil` timestamp to suppress remote events briefly after takeover
 - **Session ID**: Generates unique session IDs via `crypto.randomUUID()`
+
+**Key actions:**
+- `submitSecondarySecret(secret)`: Stores secret, attempts to load player ID from relay
+- `setupWithNsec(nsec)`: Creates new player ID, encrypts with secondary secret, signs and publishes
+- `rotatePlayerId(nsec)`: Generates new player ID (old history becomes inaccessible)
+- `generateNewIdentity()`: Creates new npub/nsec pair
 
 ### useNostrSync (`hooks/useNostrSync.ts`)
 
@@ -94,31 +136,48 @@ User Action → AudioPlayer → saveCurrentPosition() → localStorage
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         SESSION STATES                               │
 ├─────────────────────────────────────────────────────────────────────┤
-│  unknown    │  No secret in URL, view-only (controls disabled)      │
-│  invalid    │  Secret has bad checksum, likely typo in URL          │
-│  idle       │  Secret present, viewing read-only, not claimed       │
-│  active     │  Session claimed, can edit and sync                   │
-│  stale      │  Another device took over, read-only until reclaim    │
+│  no_npub      │  No npub in URL, show "Generate New Identity"       │
+│  needs_secret │  Has npub, needs secondary secret entry             │
+│  loading      │  Fetching player ID from relay                      │
+│  needs_setup  │  No player ID exists, needs nsec to create one      │
+│  idle         │  Ready, has player ID, session not started          │
+│  active       │  Session claimed, can edit and sync                 │
+│  stale        │  Another device took over, read-only until reclaim  │
+│  invalid      │  Invalid npub format in URL                         │
 └─────────────────────────────────────────────────────────────────────┘
 
 Page Load Flow:
 ───────────────
-  No secret in URL → "unknown" (view-only, no sync)
+  No npub in URL → "no_npub"
+       ↓
+  [Generate New Identity] → show credentials → enter secret
+       ↓
+  npub set in URL hash → "needs_secret"
 
-  Secret in URL with bad checksum → "invalid" (error shown, no sync)
+  npub in URL (invalid format) → "invalid" (error shown)
 
-  Secret in URL with valid checksum → "idle" (read-only)
+  npub in URL (valid) + no cached secret → "needs_secret"
        ↓
-  performInitialLoad() fetches history
+  [Submit Secondary Secret] → "loading"
        ↓
-  User clicks "Start Session"
+  Player ID found → "idle"
+  Player ID not found → "needs_setup"
        ↓
-  startSession() claims session → "active"
+  [Enter nsec] → create player ID → "idle"
+
+  npub in URL + cached secret → "loading"
+       ↓
+  Decrypt player ID from relay → "idle"
+       ↓
+  [Start Session] → "active"
 
 
 State Transitions:
 ──────────────────
-  invalid ──[Generate New Secret]──▶ idle
+  no_npub ──[Generate Identity]──▶ (show credentials) ──▶ needs_secret
+  needs_secret ──[Submit Secret, found player ID]──▶ idle
+  needs_secret ──[Submit Secret, no player ID]──▶ needs_setup
+  needs_setup ──[Setup with nsec]──▶ idle
   idle ──[Start Session]──▶ active
   active ──[Remote takeover]──▶ stale
   stale ──[Take Over Session]──▶ active
@@ -130,13 +189,15 @@ State Transitions:
 
 | Transition | Trigger | Mechanism |
 |------------|---------|-----------|
-| `invalid` → `idle` | User clicks "Generate New Secret Link" | `generateSecret()` creates new valid secret, updates URL hash |
+| `no_npub` → `needs_secret` | User clicks "Generate New Identity" | `generateNewIdentity()` creates npub/nsec, sets URL hash |
+| `needs_secret` → `loading` | User submits secondary secret | `submitSecondarySecret()` stores secret, fetches player ID |
+| `loading` → `idle` | Player ID decrypted successfully | `loadPlayerIdFromNostr()` returns valid player ID |
+| `loading` → `needs_setup` | No player ID event exists | `checkPlayerIdEventExists()` returns false |
+| `needs_setup` → `idle` | User enters nsec | `setupWithNsec()` creates and publishes player ID |
 | `idle` → `active` | User clicks "Start Session" | `startSession()` publishes with new sessionId, starts 15s grace period |
 | `active` → `stale` | Remote event with different sessionId | `subscribeToHistoryDetailed()` detects foreign sessionId in payload |
 | `active` → `stale` | Tab regains focus after takeover | Visibility handler fetches latest event, detects different sessionId |
-| `stale` → `active` | User clicks "Take Over Session" | `performLoad(secret, isTakeOver=true)` re-claims with new sessionId |
-| `idle` → `idle` | Remote event arrives | History merged via `onHistoryLoaded`, no session claim |
-| `stale` → `stale` | Remote event arrives | History merged via `onRemoteSync`, remains read-only |
+| `stale` → `active` | User clicks "Take Over Session" | Re-claims with new sessionId |
 
 **Timeout/Heartbeat Behavior:**
 - No heartbeat or timeout-based stale detection exists.
@@ -166,6 +227,43 @@ From Stale (reclaiming):
 
 ## Library Modules
 
+### identity.ts
+
+Identity management with localStorage scoping by npub fingerprint.
+
+```typescript
+interface IdentityState {
+  npub: string;
+  pubkeyHex: string;
+  playerId: string | null;
+  hasSecondarySecret: boolean;
+}
+```
+
+**Storage Keys (scoped by npub fingerprint):**
+
+All localStorage keys are scoped by npub fingerprint for isolation:
+
+| Key Pattern | Description |
+|-------------|-------------|
+| `com.audioplayer.secondary-secret.{fingerprint}` | Secondary secret for this npub |
+| `com.audioplayer.nsec.{fingerprint}` | Optional stored nsec (user convenience) |
+| `com.audioplayer.history.v1.{fingerprint}` | History entries array |
+| `com.audioplayer.history.timestamp.{fingerprint}` | Last update timestamp |
+
+The fingerprint is a 16-character hex string (first 64 bits of SHA-256 hash of the pubkeyHex).
+
+**Key functions:**
+
+- `getNpubFingerprint(pubkeyHex)`: Generates 16-char hex fingerprint from pubkey (async, uses SubtleCrypto)
+- `getSecondarySecret(fingerprint)`: Retrieves secondary secret from localStorage
+- `setSecondarySecret(fingerprint, secret)`: Stores secondary secret
+- `getStoredNsec(fingerprint)`: Retrieves optional stored nsec
+- `storeNsec(fingerprint, nsec)`: Stores nsec for convenience
+- `clearAllIdentityData(fingerprint)`: Clears all data for a fingerprint
+
+**Note:** Player ID is NOT cached locally - it's always fetched from relay using the secondary secret.
+
 ### history.ts
 
 History types and local storage helpers.
@@ -186,26 +284,10 @@ interface HistoryPayload {
 }
 ```
 
-**Storage Keys (scoped by fingerprint):**
-
-History is isolated per session secret using a fingerprint-scoped storage key pattern:
-
-| Key Pattern | Description |
-|-------------|-------------|
-| `com.audioplayer.history.v1.{fingerprint}` | History entries array |
-| `com.audioplayer.history.timestamp.{fingerprint}` | Last update timestamp |
-| `com.audioplayer.session.last_used_secret` | Last used session secret (for "Resume Previous Session") |
-
-The fingerprint is a 16-character hex string (first 64 bits of SHA-256 hash of the secret). This prevents history conflicts when using multiple secrets on the same host.
-
 **Key functions:**
 
-- `getStorageFingerprint(secret)`: Generates 16-char hex fingerprint from secret (async, uses SubtleCrypto)
-- `getTimestampStorageKey(fingerprint?)`: Returns scoped timestamp key
 - `getHistory(fingerprint?)`: Retrieves validated history from localStorage (scoped by fingerprint)
 - `saveHistory(history, fingerprint?)`: Persists history with timestamp for cross-tab sync (scoped by fingerprint)
-- `getLastUsedSecret()`: Retrieves the last used session secret
-- `saveLastUsedSecret(secret)`: Persists secret for session resumption
 - `validateHistoryPayload()` lives in `nostr-crypto.ts` (payload validation after decryption)
 - Max 100 entries (trimmed on save)
 
@@ -222,76 +304,118 @@ Nostr protocol integration for cloud sync.
 
 **Event structure (NIP-78):**
 - Kind: 30078 (application-specific replaceable)
-- d-tag: "audioplayer-v3"
+- d-tag: "audioplayer-playerid-v1" (player ID events, signed by nsec)
+- d-tag: "audioplayer-history-v1" (history events, signed by player ID derived key)
+
+**Player ID events:**
+- Authored by user's npub (signed by nsec)
+- Content: player ID encrypted with secondary secret (AES-GCM)
+- Only created during initial setup or rotation
+
+**History events:**
+- Authored by player ID public key (NOT npub)
+- Content: history encrypted with player ID derived key (NIP-44)
+- Signed by player ID derived private key
 
 **Session tag strategy**
 - UUIDv4 generated via `crypto.randomUUID()` per client session (122 bits of randomness).
 
 **Stale-session detection**
 - Real-time subscription detects remote session activity via `HistoryPayload.sessionId`. When a remote event with a different sessionId arrives, the local session transitions to `stale` status only if currently `active`. Idle sessions stay idle (they haven't claimed the session yet).
-- **Idle state:** Page load with secret starts in `idle` state. User must click "Start Session" to claim. This prevents race conditions and confusion about session ownership.
+- **Idle state:** Page load with valid npub and secondary secret starts in `idle` state after loading player ID. User must click "Start Session" to claim. This prevents race conditions and confusion about session ownership.
 - **Takeover grace period:** After taking over a session, remote events are ignored for a configurable grace period (`ignoreRemoteUntil`) to prevent immediate re-staling from delayed events.
-- **Live position sync:** Active sessions publish position updates every 5s during playback, allowing idle/stale devices to track playback position. Idle devices apply incoming position updates immediately to their UI and history (displayed position stays in sync) but do not start or change playback state. When transitioning from idle to active, the client seeks to the latest received position (only the most recent position is retained, no queueing). Takeover grace period rules still apply to prevent immediate re-staling from delayed events.
+- **Live position sync:** Active sessions publish position updates every 5s during playback, allowing idle/stale devices to track playback position.
 
 **Key functions (nostr-sync.ts):**
-- `saveHistoryToNostr()`: Encrypts and publishes history with embedded timestamp and sessionId
-- `loadHistoryFromNostr()`: Fetches and decrypts latest history, returns `HistoryPayload`
-- `subscribeToHistoryDetailed()`: Real-time subscription returning full `HistoryPayload` for timestamp ordering
+- `publishPlayerIdToNostr()`: Encrypts player ID with secondary secret, signs with nsec, publishes
+- `loadPlayerIdFromNostr()`: Fetches player ID event, decrypts with secondary secret
+- `checkPlayerIdEventExists()`: Checks if player ID event exists for a pubkey
+- `saveHistoryToNostr()`: Encrypts and publishes history using player ID derived keys
+- `loadHistoryFromNostr()`: Fetches and decrypts history using player ID derived keys
+- `subscribeToHistoryDetailed()`: Real-time subscription using player ID public key
 - `mergeHistory()`: Combines local and cloud history with conflict resolution
-- `parseAndValidateEventContent()`: Validates Nostr event content structure
-- `canSetOnError()`: Type guard for error handler assignment
 
 **Key functions (useNostrSync.ts):**
 - `performInitialLoad()`: Fetches history read-only without claiming session (for idle state)
 - `startSession()`: Claims session by calling performLoad with isTakeOver=true
 - `performLoad()`: Fetches and optionally claims session
-- `performSave()`: Encrypts and publishes current history
+- `performSave()`: Encrypts and publishes current history using encryptionKeys only
 - Visibility change handler: Validates active session on tab focus by fetching latest event and checking sessionId
 
 ### nostr-crypto.ts
 
 Cryptographic utilities for secure sync.
 
-**Secret format:**
+**Player ID format:**
+- 32 bytes random, hex encoded (64 characters)
+- `generatePlayerId()`: Creates new player ID
+- `isValidPlayerId(playerId)`: Validates length and hex format
+
+**Secondary secret format:**
 - 11 bytes random + 1 byte CRC-8 checksum = 12 bytes total
-- URL-safe Base64 encoded → 16 characters (e.g., `#OR8QqY-v_4XA64vx`)
-- Checksum enables fail-fast validation before attempting key derivation/decryption
-- `generateSecret()`: Creates new secret with embedded checksum
-- `isValidSecret(secret)`: Validates length, format, and checksum; returns `false` for typos
+- URL-safe Base64 encoded → 16 characters
+- Checksum enables fail-fast validation
+- `generateSecondarySecret()`: Creates new secondary secret with embedded checksum
+- `isValidSecondarySecret(secret)`: Validates length, format, and checksum
 
-**Key derivation:**
-- User secret (URL hash) → HKDF-SHA256 with salt → secp256k1 keypair
-- `deriveNostrKeys(secret, signal?)`: Async key derivation with optional abort signal
+**npub/nsec utilities:**
+- `parseNpubFromHash(hash)`: Extracts and validates npub from URL hash, returns hex pubkey
+- `decodeNsec(nsec)`: Decodes nsec to private key bytes
+- `generateNostrKeypair()`: Creates new npub/nsec keypair
 
-**Encryption (NIP-44):**
+**Player ID encryption (AES-GCM):**
+- `encryptWithSecondarySecret(data, secondarySecret)`: Encrypts player ID
+- `decryptWithSecondarySecret(ciphertext, secondarySecret)`: Decrypts player ID
+
+**Key derivation from player ID:**
+- Player ID → HKDF-SHA256 with salt → secp256k1 keypair
+- `deriveEncryptionKey(playerId)`: Derives keys for history encryption AND signing
+
+**History encryption (NIP-44):**
 - Ephemeral keypair per encryption
 - ECDH shared secret → ChaCha20-Poly1305
-- `encryptHistory(data, publicKey, sessionId?)`: Encrypts history with embedded `HistoryPayload` (includes `timestamp: Date.now()` and optional `sessionId`)
-- `decryptHistory(ciphertext, ephemeralPubKey, privateKey)`: Returns full `HistoryPayload` with timestamp for ordering
+- `encryptHistory(data, publicKey, sessionId?)`: Encrypts history with embedded `HistoryPayload`
+- `decryptHistory(ciphertext, ephemeralPubKey, privateKey)`: Returns full `HistoryPayload`
 
 ## Security Model
 
-1. **Secret-based Access**: The URL hash contains the secret key
-2. **Checksum Validation**: CRC-8 checksum detects typos immediately (fail-fast)
-3. **End-to-End Encryption**: History is encrypted before leaving the device
-4. **No Server Trust**: Relays only see encrypted blobs
-5. **Session Ownership**: Session ID prevents simultaneous edits
+1. **npub-based Identity**: URL hash contains public key (npub), safe to share
+2. **Secondary Secret**: Per-device secret encrypts player ID only
+3. **Player ID Derived Keys**: History encrypted AND signed with keys derived from player ID
+4. **End-to-End Encryption**: History is encrypted before leaving the device
+5. **No Server Trust**: Relays only see encrypted blobs
+6. **Session Ownership**: Session ID prevents simultaneous edits
 
 ```
-URL: https://app.example.com/#<secret>
-                               ↓
-                    isValidSecret(secret)
-                               ↓
+URL: https://app.example.com/#npub1abc...
+                               │
+                    parseNpubFromHash()
+                               │
               ┌────────────────┴────────────────┐
               ▼                                 ▼
           invalid                            valid
-    (show error, block sync)                   ↓
-                                    deriveNostrKeys(secret)
-                                               ↓
+    (show error, block sync)                   │
+                                               ▼
+                                    getSecondarySecret()
+                                               │
+                              ┌────────────────┴────────────────┐
+                              ▼                                 ▼
+                         missing                            present
+                    (prompt user entry)                        │
+                                               ▼
+                                    loadPlayerIdFromNostr()
+                                               │
+                              ┌────────────────┴────────────────┐
+                              ▼                                 ▼
+                      not found                              found
+                (needs nsec for setup)                         │
+                                               ▼
+                                    deriveEncryptionKey(playerId)
+                                               │
                               ┌────────────────┴────────────────┐
                               ▼                                 ▼
                         privateKey                         publicKey
-                    (decrypt/sign)                      (encrypt/verify)
+                  (decrypt/sign history)              (encrypt/query history)
 ```
 
 ## Resilience & Error Handling

@@ -63,6 +63,29 @@ This document tracks planned improvements and known limitations for the audio pl
   - Optional local-only mode when relay access is blocked
   - Recommended guidance: use modern Chromium/Firefox/Safari; avoid private browsing for persistent history
 
+## Security Enhancements
+
+### Non-Extractable Web Crypto Key Storage
+- **Status:** Idea / Not implemented
+- **Description:** Store secondary secret as a non-extractable CryptoKey in IndexedDB
+- **Current behavior:** Secondary secret is stored as plaintext in localStorage. While it never leaves the client, any JavaScript on the same origin could read it.
+- **Proposed:**
+  - Import secondary secret as a non-extractable AES-GCM key using Web Crypto API
+  - Store the CryptoKey object in IndexedDB (which supports structured clone of CryptoKey)
+  - Use the key for encryption/decryption operations without ever being able to extract the raw material
+  - Benefits: Prevents accidental logging, analytics capture, or XSS from extracting the secret
+  - Limitations: Still vulnerable to same-origin JS using the key (just can't read it); user must still enter secret on first use per device
+- **Implementation sketch:**
+  ```typescript
+  // Import as non-extractable key
+  const key = await crypto.subtle.importKey(
+    "raw", secretBytes, "PBKDF2", false, ["deriveKey"]
+  );
+  // Store in IndexedDB
+  await db.put("keys", key, "secondary-secret");
+  // Retrieve and use - can encrypt/decrypt but never read key material
+  ```
+
 ## Playlist Management
 
 ### Separate Groups for Live Streams and VOD
