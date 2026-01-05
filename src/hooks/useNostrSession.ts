@@ -278,8 +278,7 @@ export function useNostrSession({
         return false;
       }
 
-      // Store the secret
-      setSecondarySecret(fingerprint, secret);
+      // Set React state for UI feedback (defer localStorage until validated)
       setSecondarySecretState(secret);
 
       // Try to load player id from relay with new secret
@@ -287,6 +286,8 @@ export function useNostrSession({
       try {
         const remotePlayerId = await loadPlayerIdFromNostr(pubkeyHex, secret);
         if (remotePlayerId && isValidPlayerId(remotePlayerId)) {
+          // Success - now persist to localStorage
+          setSecondarySecret(fingerprint, secret);
           setPlayerId(remotePlayerId);
           const keys = await deriveEncryptionKey(remotePlayerId);
           setEncryptionKeys(keys);
@@ -294,20 +295,21 @@ export function useNostrSession({
           setSessionNotice(null);
           return true;
         }
-        // No player id exists - need to set up with nsec
+        // No player id exists - secret is valid, persist and proceed to setup
+        setSecondarySecret(fingerprint, secret);
         setSessionStatus("needs_setup");
         setSessionNotice(null);
         return true;
       } catch (err) {
         if (err instanceof PlayerIdDecryptionError) {
-          // Decrypt failed - wrong secret, clear from both React state and localStorage
+          // Decryption failed - wrong secret, clear React state (not persisted yet)
           setSecondarySecretState(null);
-          clearSecondarySecret(fingerprint);
-          setSessionNotice("Failed to decrypt player ID. Wrong secret?");
+          setSessionNotice("Wrong secondary secret. Please re-enter.");
           setSessionStatus("needs_secret");
           return false;
         }
-        // Network or other error - preserve the secret and show error
+        // Network or other error - persist secret for retry and show error
+        setSecondarySecret(fingerprint, secret);
         setSessionNotice(
           `Network error: ${err instanceof Error ? err.message : "Failed to connect to relay"}. Please try again.`
         );
