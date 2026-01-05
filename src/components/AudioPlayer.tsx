@@ -75,6 +75,8 @@ function AudioPlayerInner({
   const audioContextRef = useRef<AudioContext | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const analyserNodeRef = useRef<AnalyserNode | null>(null);
+  const meterRafRef = useRef<number | null>(null);
   const gainRef = useRef<number>(1);
   const pausedAtTimestampRef = useRef<number | null>(null);
   const pendingSeekTimerRef = useRef<number | null>(null);
@@ -99,6 +101,7 @@ function AudioPlayerInner({
   const [isLiveStream, setIsLiveStream] = useState(false);
   const [gainEnabled, setGainEnabled] = useState(false);
   const [gain, setGain] = useState(1); // 1 = 100%
+  const [meterLevel, setMeterLevel] = useState(0);
   const [isViewOnly, setIsViewOnly] = useState(false);
   const [actualSessionStatus, setActualSessionStatus] = useState<"idle" | "active" | "stale" | "invalid" | "unknown">("unknown");
   const [editingUrl, setEditingUrl] = useState<string | null>(null);
@@ -151,7 +154,7 @@ function AudioPlayerInner({
     });
   }, []);
 
-  const ensureGainNode = useCallback(() => {
+  const ensureAudioGraph = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return false;
 
@@ -159,9 +162,10 @@ function AudioPlayerInner({
       audioContextRef.current = null;
       sourceNodeRef.current = null;
       gainNodeRef.current = null;
+      analyserNodeRef.current = null;
     }
 
-    if (audioContextRef.current && sourceNodeRef.current && gainNodeRef.current) {
+    if (audioContextRef.current && sourceNodeRef.current && gainNodeRef.current && analyserNodeRef.current) {
       return true;
     }
 
@@ -179,13 +183,17 @@ function AudioPlayerInner({
       const ctx = new AudioContextClass();
       const source = ctx.createMediaElementSource(audio);
       const gainNode = ctx.createGain();
+      const analyserNode = ctx.createAnalyser();
+      analyserNode.fftSize = 2048;
 
       source.connect(gainNode);
-      gainNode.connect(ctx.destination);
+      gainNode.connect(analyserNode);
+      analyserNode.connect(ctx.destination);
 
       audioContextRef.current = ctx;
       sourceNodeRef.current = source;
       gainNodeRef.current = gainNode;
+      analyserNodeRef.current = analyserNode;
 
       return true;
     } catch (err) {
@@ -195,11 +203,36 @@ function AudioPlayerInner({
     }
   }, []);
 
-  const resumeBoostContext = useCallback(() => {
-    if (!gainEnabled) return;
-    if (!ensureGainNode()) return;
+  const resumeAudioGraph = useCallback(() => {
+    if (!ensureAudioGraph()) return;
     resumeAudioContext();
-  }, [gainEnabled, ensureGainNode, resumeAudioContext]);
+  }, [ensureAudioGraph, resumeAudioContext]);
+
+  const startMeter = useCallback(() => {
+    const analyser = analyserNodeRef.current;
+    if (!analyser || meterRafRef.current !== null) return;
+    const data = new Uint8Array(analyser.fftSize);
+    const tick = () => {
+      analyser.getByteTimeDomainData(data);
+      let sumSquares = 0;
+      for (let i = 0; i < data.length; i += 1) {
+        const centered = (data[i] - 128) / 128;
+        sumSquares += centered * centered;
+      }
+      const rms = Math.sqrt(sumSquares / data.length);
+      setMeterLevel(rms);
+      meterRafRef.current = requestAnimationFrame(tick);
+    };
+    meterRafRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  const stopMeter = useCallback(() => {
+    if (meterRafRef.current !== null) {
+      cancelAnimationFrame(meterRafRef.current);
+      meterRafRef.current = null;
+    }
+    setMeterLevel(0);
+  }, []);
 
   // Apply gain value when enabled
   useEffect(() => {
@@ -218,14 +251,14 @@ function AudioPlayerInner({
       return;
     }
 
-    if (!ensureGainNode() || !gainNodeRef.current) {
+    if (!ensureAudioGraph() || !gainNodeRef.current) {
       return;
     }
 
     gainNodeRef.current.gain.value = gainRef.current;
     resumeAudioContext();
     setGainEnabled(true);
-  }, [gainEnabled, ensureGainNode, resumeAudioContext]);
+  }, [gainEnabled, ensureAudioGraph, resumeAudioContext]);
 
   // Save history entry with an explicit position (skip for live streams)
   const saveHistoryEntry = useCallback((position?: number, options?: { allowLive?: boolean }) => {
@@ -298,18 +331,23 @@ function AudioPlayerInner({
         gainNodeRef.current.disconnect();
         gainNodeRef.current = null;
       }
+      if (analyserNodeRef.current) {
+        analyserNodeRef.current.disconnect();
+        analyserNodeRef.current = null;
+      }
       if (audioContextRef.current) {
         void audioContextRef.current.close().catch((err) => {
           console.error("Failed to close AudioContext:", err);
         });
         audioContextRef.current = null;
       }
+      stopMeter();
       if (pendingSeekTimerRef.current) {
         clearTimeout(pendingSeekTimerRef.current);
         pendingSeekTimerRef.current = null;
       }
     };
-  }, [saveHistoryEntry]);
+  }, [saveHistoryEntry, stopMeter]);
 
   // Load directly from a history entry (with position)
   const loadFromHistory = useCallback((entry: HistoryEntry, options?: { forceReset?: boolean }) => {
@@ -524,7 +562,7 @@ function AudioPlayerInner({
     if (isPlaying) {
       audio.pause();
     } else {
-      resumeBoostContext();
+      resumeAudioGraph();
       audio.play().catch((e) => {
         setError(`Playback error: ${e.message}`);
       });
@@ -665,6 +703,7 @@ function AudioPlayerInner({
     setIsPlaying(false);
     pausedAtTimestampRef.current = Date.now();
     saveHistoryEntry();
+    stopMeter();
   };
 
   const handleSeek = (value: number[]) => {
@@ -702,7 +741,7 @@ function AudioPlayerInner({
       }
     }
 
-    resumeBoostContext();
+    resumeAudioGraph();
     audio.play().catch((e) => setError(`Playback error: ${e.message}`));
   };
 
@@ -858,7 +897,7 @@ function AudioPlayerInner({
 
     // Set action handlers with custom seek offsets (-15s back, +30s forward)
     session.setActionHandler("play", () => {
-      resumeBoostContext();
+      resumeAudioGraph();
       audioRef.current?.play();
     });
     session.setActionHandler("pause", () => {
@@ -886,7 +925,7 @@ function AudioPlayerInner({
       session.setActionHandler("previoustrack", null);
       session.setActionHandler("nexttrack", null);
     };
-  }, [resumeBoostContext, seekRelative]);
+  }, [resumeAudioGraph, seekRelative]);
 
   // Update Media Session metadata when now playing changes
   useEffect(() => {
@@ -928,12 +967,17 @@ function AudioPlayerInner({
         gainNodeRef.current.disconnect();
         gainNodeRef.current = null;
       }
+      if (analyserNodeRef.current) {
+        analyserNodeRef.current.disconnect();
+        analyserNodeRef.current = null;
+      }
       if (audioContextRef.current) {
         void audioContextRef.current.close().catch((err) => {
           console.error("Failed to close AudioContext:", err);
         });
         audioContextRef.current = null;
       }
+      stopMeter();
       if (audio) {
         audio.src = "";
         audio.load();
@@ -941,7 +985,7 @@ function AudioPlayerInner({
       setIsLoaded(false);
       setIsPlaying(false);
     }
-  }, []);
+  }, [stopMeter]);
 
   useEffect(() => {
     if (isViewOnly) {
@@ -1123,12 +1167,16 @@ function AudioPlayerInner({
           onLoadedMetadata={handleLoadedMetadata}
           onCanPlay={applyPendingSeek}
           onPlay={() => {
-            resumeBoostContext();
+            resumeAudioGraph();
+            startMeter();
             setIsPlaying(true);
           }}
           onSeeked={handleSeeked}
           onPause={handlePause}
-          onEnded={() => setIsPlaying(false)}
+          onEnded={() => {
+            setIsPlaying(false);
+            stopMeter();
+          }}
           onError={() => setError("Audio playback error")}
           playsInline
         />
@@ -1211,6 +1259,20 @@ function AudioPlayerInner({
             </div>
           </div>
         )}
+
+        {/* Audio Meter */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>Meter</span>
+            <span>{Math.round(meterLevel * 100)}%</span>
+          </div>
+          <div className="h-2 rounded bg-muted overflow-hidden">
+            <div
+              className="h-full bg-emerald-500 transition-[width] duration-75"
+              style={{ width: `${Math.min(100, Math.round(meterLevel * 100))}%` }}
+            />
+          </div>
+        </div>
 
         {/* Gain Control */}
         <div className="flex items-center gap-3">
