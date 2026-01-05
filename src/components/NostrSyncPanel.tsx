@@ -171,9 +171,12 @@ export function NostrSyncPanel({
     setGenerationStep(null);
     setGeneratedIdentity(null);
     setSecondarySecretInput("");
-    // Remove the npub from URL if it was set
-    if (typeof window !== "undefined" && window.location.pathname !== "/") {
-      window.history.pushState(null, "", "/");
+    // Remove the npub from URL if it was set (replaceState to avoid adding history entry)
+    if (typeof window !== "undefined") {
+      const needsCleanup = window.location.pathname !== "/" || window.location.hash;
+      if (needsCleanup) {
+        window.history.replaceState(null, "", "/");
+      }
     }
   };
 
