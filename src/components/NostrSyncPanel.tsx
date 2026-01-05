@@ -40,8 +40,10 @@ export function NostrSyncPanel({
   // Input states
   const [secondarySecretInput, setSecondarySecretInput] = useState("");
   const [nsecInput, setNsecInput] = useState("");
-  const [generatedIdentity, setGeneratedIdentity] = useState<{ npub: string; nsec: string } | null>(null);
+  const [generatedIdentity, setGeneratedIdentity] = useState<{ npub: string; nsec: string; secondarySecret: string } | null>(null);
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
+  // Generation flow: "enter_secret" -> "show_credentials" -> done
+  const [generationStep, setGenerationStep] = useState<"enter_secret" | "show_credentials" | null>(null);
 
   const {
     npub,
@@ -150,15 +152,51 @@ export function NostrSyncPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pubkeyHex]);
 
+  const handleStartGeneration = () => {
+    // Start the generation flow - first ask for secondary secret
+    const newSecret = generateSecondarySecret();
+    setSecondarySecretInput(newSecret);
+    setGenerationStep("enter_secret");
+  };
+
   const handleGenerateIdentity = async () => {
+    const secret = secondarySecretInput.trim();
+    if (!secret) {
+      setSessionNotice("Please enter a secondary secret.");
+      return;
+    }
+
     try {
       const identity = await generateNewIdentity();
-      setGeneratedIdentity(identity);
-      // Generate a secondary secret for the user
-      const newSecret = generateSecondarySecret();
-      setSecondarySecretInput(newSecret);
+      setGeneratedIdentity({
+        ...identity,
+        secondarySecret: secret,
+      });
+      setGenerationStep("show_credentials");
     } catch (err) {
       setSessionNotice(`Failed to generate identity: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+  };
+
+  const handleConfirmIdentity = async () => {
+    if (!generatedIdentity) return;
+
+    // Now set up with the nsec and secondary secret
+    const result = await setupWithNsec(generatedIdentity.nsec, generatedIdentity.secondarySecret);
+    if (result) {
+      setGeneratedIdentity(null);
+      setGenerationStep(null);
+      setSecondarySecretInput("");
+    }
+  };
+
+  const handleCancelGeneration = () => {
+    setGenerationStep(null);
+    setGeneratedIdentity(null);
+    setSecondarySecretInput("");
+    // Remove the npub from URL if it was set
+    if (typeof window !== "undefined" && window.location.hash) {
+      window.location.hash = "";
     }
   };
 
@@ -232,6 +270,107 @@ export function NostrSyncPanel({
   const renderContent = () => {
     switch (sessionStatus) {
       case "no_npub":
+        // Multi-step generation flow
+        if (generationStep === "show_credentials" && generatedIdentity) {
+          return (
+            <div className="space-y-3">
+              <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded text-amber-700 text-xs">
+                <strong>Save these credentials now!</strong> You will need them to recover this identity.
+              </div>
+              <div className="space-y-2 p-2 bg-muted/50 rounded">
+                <div>
+                  <div className="text-[10px] text-muted-foreground font-medium">npub (public, shareable):</div>
+                  <code className="font-mono text-[10px] block mt-0.5 select-all break-all">
+                    {generatedIdentity.npub}
+                  </code>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted-foreground font-medium">nsec (private, keep secret):</div>
+                  <code className="font-mono text-[10px] block mt-0.5 select-all break-all text-red-600">
+                    {generatedIdentity.nsec}
+                  </code>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted-foreground font-medium">Secondary Secret (for device sync):</div>
+                  <code className="font-mono text-[10px] block mt-0.5 select-all break-all text-blue-600">
+                    {generatedIdentity.secondarySecret}
+                  </code>
+                </div>
+              </div>
+              <div className="text-[10px] text-muted-foreground">
+                The secondary secret is needed on each new device. The nsec is only needed for initial setup or player ID rotation.
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={handleConfirmIdentity}
+                  disabled={isLoading}
+                  className="flex-1 h-8 text-xs"
+                >
+                  {isLoading ? "Creating..." : "I've Saved These - Continue"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleCancelGeneration}
+                  className="h-8 text-xs"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          );
+        }
+
+        if (generationStep === "enter_secret") {
+          return (
+            <div className="space-y-3">
+              <div className="text-xs text-muted-foreground">
+                Enter or generate a secondary secret. This will be used to encrypt your player ID.
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Secondary Secret:</label>
+                <Input
+                  type="text"
+                  value={secondarySecretInput}
+                  onChange={(e) => setSecondarySecretInput(e.target.value)}
+                  placeholder="Enter or use generated secret"
+                  className="h-8 text-xs font-mono"
+                />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setSecondarySecretInput(generateSecondarySecret())}
+                  className="h-6 text-[10px] px-2"
+                >
+                  Regenerate
+                </Button>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={handleGenerateIdentity}
+                  disabled={isLoading || !secondarySecretInput.trim()}
+                  className="flex-1 h-8 text-xs"
+                >
+                  Generate Identity
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleCancelGeneration}
+                  className="h-8 text-xs"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          );
+        }
+
+        // Initial state - show button to start
         return (
           <div className="space-y-3">
             <div className="text-xs text-muted-foreground">
@@ -240,7 +379,7 @@ export function NostrSyncPanel({
             <Button
               size="sm"
               variant="default"
-              onClick={handleGenerateIdentity}
+              onClick={handleStartGeneration}
               disabled={isLoading}
               className="w-full h-8 text-xs"
             >
@@ -285,35 +424,12 @@ export function NostrSyncPanel({
         );
 
       case "needs_setup":
+        // This state is reached when user has npub + secondary secret but no player ID on relay
         return (
           <div className="space-y-3">
             <div className="text-xs text-muted-foreground">
-              {generatedIdentity ? (
-                <>
-                  <div className="mb-2 p-2 bg-amber-500/10 border border-amber-500/20 rounded text-amber-700">
-                    <strong>Save these now!</strong> You will need the nsec to recover this identity.
-                  </div>
-                  <div className="space-y-1 font-mono text-[10px] break-all">
-                    <div><strong>npub:</strong> {generatedIdentity.npub}</div>
-                    <div><strong>nsec:</strong> {generatedIdentity.nsec}</div>
-                  </div>
-                </>
-              ) : (
-                "Enter your nsec to create the initial player ID."
-              )}
+              No player ID found on relay. Enter your nsec to create one.
             </div>
-            {generatedIdentity && (
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">Secondary Secret (save this too):</label>
-                <Input
-                  type="text"
-                  value={secondarySecretInput}
-                  onChange={(e) => setSecondarySecretInput(e.target.value)}
-                  placeholder="Secondary secret"
-                  className="h-8 text-xs font-mono"
-                />
-              </div>
-            )}
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">nsec (private key):</label>
               <Input
