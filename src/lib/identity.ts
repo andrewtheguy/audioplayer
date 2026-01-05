@@ -14,9 +14,9 @@ export interface IdentityState {
 }
 
 /**
- * Get fingerprint for localStorage scoping (first 32 hex chars / 128 bits of SHA-256 of pubkey)
+ * Get storage scope key for localStorage isolation (first 32 hex chars / 128 bits of SHA-256 of pubkey)
  */
-export async function getNpubFingerprint(pubkeyHex: string): Promise<string> {
+export async function getStorageScope(pubkeyHex: string): Promise<string> {
   // Validate input
   if (!pubkeyHex || typeof pubkeyHex !== "string") {
     throw new Error("Invalid pubkeyHex: must be a non-empty string");
@@ -35,7 +35,7 @@ export async function getNpubFingerprint(pubkeyHex: string): Promise<string> {
     hashBuffer = await crypto.subtle.digest("SHA-256", data);
   } catch (err) {
     throw new Error(
-      `Failed to compute fingerprint: ${err instanceof Error ? err.message : "Unknown crypto error"}`
+      `Failed to compute storage scope: ${err instanceof Error ? err.message : "Unknown crypto error"}`
     );
   }
 

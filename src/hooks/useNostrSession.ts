@@ -11,7 +11,7 @@ import {
   deriveEncryptionKey,
 } from "@/lib/nostr-crypto";
 import {
-  getNpubFingerprint,
+  getStorageScope,
   getSecondarySecret,
   setSecondarySecret,
   clearSecondarySecret,
@@ -174,7 +174,7 @@ export function useNostrSession({
       setPubkeyHex(hex);
 
       // 3. Get fingerprint for localStorage scoping
-      const fp = await getNpubFingerprint(hex);
+      const fp = await getStorageScope(hex);
       setFingerprint(fp);
 
       // 4. Check for cached secondary secret

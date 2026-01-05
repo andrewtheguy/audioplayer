@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RELAYS } from "@/lib/nostr-sync";
-import { getNpubFingerprint } from "@/lib/identity";
+import { getStorageScope } from "@/lib/identity";
 import { generateSecondarySecret } from "@/lib/nostr-crypto";
 import { cn } from "@/lib/utils";
 import {
@@ -118,7 +118,7 @@ export function NostrSyncPanel({
       return;
     }
     let cancelled = false;
-    getNpubFingerprint(pubkeyHex)
+    getStorageScope(pubkeyHex)
       .then((fingerprint) => {
         if (!cancelled) {
           onFingerprintChange?.(fingerprint);
