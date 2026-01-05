@@ -256,119 +256,118 @@ export function NostrSyncPanel({
 
   // Render based on session status
   const renderContent = () => {
+    // Priority: Show credentials screen if in generation flow (regardless of sessionStatus)
+    // This is needed because generateNewIdentity sets the URL hash, which changes sessionStatus
+    if (generationStep === "show_credentials" && generatedIdentity) {
+      return (
+        <div className="space-y-3">
+          <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded text-amber-700 text-xs">
+            <strong>Save these credentials now!</strong> You will need them to recover this identity.
+          </div>
+          <div className="space-y-2 p-2 bg-muted/50 rounded">
+            <div>
+              <div className="text-[10px] text-muted-foreground font-medium">npub (public, shareable):</div>
+              <code className="font-mono text-[10px] block mt-0.5 select-all break-all">
+                {generatedIdentity.npub}
+              </code>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground font-medium">nsec (private, keep secret):</div>
+              <code className="font-mono text-[10px] block mt-0.5 select-all break-all text-red-600">
+                {generatedIdentity.nsec}
+              </code>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground font-medium">Secondary Secret (for device sync):</div>
+              <code className="font-mono text-[10px] block mt-0.5 select-all break-all text-blue-600">
+                {generatedIdentity.secondarySecret}
+              </code>
+            </div>
+          </div>
+          <div className="text-[10px] text-muted-foreground">
+            The secondary secret is needed on each new device. The nsec is only needed for initial setup or player ID rotation.
+          </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="default"
+              onClick={handleConfirmIdentity}
+              disabled={isLoading}
+              className="flex-1 h-8 text-xs"
+            >
+              {isLoading ? "Creating..." : "I've Saved These - Continue"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handleCancelGeneration}
+              className="h-8 text-xs"
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    if (generationStep === "enter_secret") {
+      return (
+        <div className="space-y-3">
+          <div className="text-xs text-muted-foreground">
+            Enter or generate a secondary secret. This will be used to encrypt your player ID.
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Secondary Secret:</label>
+            <Input
+              type="text"
+              value={secondarySecretInput}
+              onChange={(e) => setSecondarySecretInput(e.target.value)}
+              placeholder="Enter or use generated secret"
+              className="h-8 text-xs font-mono"
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setSecondarySecretInput(generateSecondarySecret())}
+              className="h-6 text-[10px] px-2"
+            >
+              Regenerate
+            </Button>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="default"
+              onClick={handleGenerateIdentity}
+              disabled={isLoading || !secondarySecretInput.trim()}
+              className="flex-1 h-8 text-xs"
+            >
+              Generate Identity
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handleCancelGeneration}
+              className="h-8 text-xs"
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
     switch (sessionStatus) {
       case "no_npub":
-        // Multi-step generation flow
-        if (generationStep === "show_credentials" && generatedIdentity) {
-          return (
-            <div className="space-y-3">
-              <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded text-amber-700 text-xs">
-                <strong>Save these credentials now!</strong> You will need them to recover this identity.
-              </div>
-              <div className="space-y-2 p-2 bg-muted/50 rounded">
-                <div>
-                  <div className="text-[10px] text-muted-foreground font-medium">npub (public, shareable):</div>
-                  <code className="font-mono text-[10px] block mt-0.5 select-all break-all">
-                    {generatedIdentity.npub}
-                  </code>
-                </div>
-                <div>
-                  <div className="text-[10px] text-muted-foreground font-medium">nsec (private, keep secret):</div>
-                  <code className="font-mono text-[10px] block mt-0.5 select-all break-all text-red-600">
-                    {generatedIdentity.nsec}
-                  </code>
-                </div>
-                <div>
-                  <div className="text-[10px] text-muted-foreground font-medium">Secondary Secret (for device sync):</div>
-                  <code className="font-mono text-[10px] block mt-0.5 select-all break-all text-blue-600">
-                    {generatedIdentity.secondarySecret}
-                  </code>
-                </div>
-              </div>
-              <div className="text-[10px] text-muted-foreground">
-                The secondary secret is needed on each new device. The nsec is only needed for initial setup or player ID rotation.
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="default"
-                  onClick={handleConfirmIdentity}
-                  disabled={isLoading}
-                  className="flex-1 h-8 text-xs"
-                >
-                  {isLoading ? "Creating..." : "I've Saved These - Continue"}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={handleCancelGeneration}
-                  className="h-8 text-xs"
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          );
-        }
-
-        if (generationStep === "enter_secret") {
-          return (
-            <div className="space-y-3">
-              <div className="text-xs text-muted-foreground">
-                Enter or generate a secondary secret. This will be used to encrypt your player ID.
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">Secondary Secret:</label>
-                <Input
-                  type="text"
-                  value={secondarySecretInput}
-                  onChange={(e) => setSecondarySecretInput(e.target.value)}
-                  placeholder="Enter or use generated secret"
-                  className="h-8 text-xs font-mono"
-                />
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setSecondarySecretInput(generateSecondarySecret())}
-                  className="h-6 text-[10px] px-2"
-                >
-                  Regenerate
-                </Button>
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="default"
-                  onClick={handleGenerateIdentity}
-                  disabled={isLoading || !secondarySecretInput.trim()}
-                  className="flex-1 h-8 text-xs"
-                >
-                  Generate Identity
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={handleCancelGeneration}
-                  className="h-8 text-xs"
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          );
-        }
-
-        // Initial state - show button to start
         return (
           <div className="space-y-3">
             <div className="text-xs text-muted-foreground">
-              No identity found. Generate a new identity to start syncing.
+              Generate a new identity to sync your playback history across devices.
             </div>
             <Button
               size="sm"
               variant="default"
               onClick={handleStartGeneration}
-              disabled={isLoading}
               className="w-full h-8 text-xs"
             >
               Generate New Identity
