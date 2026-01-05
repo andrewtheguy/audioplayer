@@ -172,8 +172,8 @@ export function NostrSyncPanel({
     setGeneratedIdentity(null);
     setSecondarySecretInput("");
     // Remove the npub from URL if it was set
-    if (typeof window !== "undefined" && window.location.hash) {
-      window.location.hash = "";
+    if (typeof window !== "undefined" && window.location.pathname !== "/") {
+      window.history.pushState(null, "", "/");
     }
   };
 
