@@ -16,8 +16,9 @@ const SECRET_RANDOM_BYTES = 11;
 const SECRET_TOTAL_BYTES = 12;
 const SECRET_LENGTH = 16;
 
-// Player ID format: 32 random bytes → 64 hex chars
-const PLAYER_ID_LENGTH = 64;
+// Player ID format: 32 random bytes → 43 URL-safe base64 chars (no padding)
+const PLAYER_ID_BYTES = 32;
+const PLAYER_ID_LENGTH = 43;
 
 /**
  * CRC-8-CCITT lookup table (polynomial 0x07).
@@ -80,42 +81,36 @@ function decodeUrlSafeBase64(str: string): Uint8Array | null {
   }
 }
 
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-  }
-  return bytes;
-}
-
 // =============================================================================
 // Player ID Functions
 // =============================================================================
 
 /**
- * Generate a new player id (32 random bytes, hex encoded = 64 chars)
+ * Generate a new player id (32 random bytes, URL-safe base64 = 43 chars)
  */
 export function generatePlayerId(): string {
-  const bytes = new Uint8Array(32);
+  const bytes = new Uint8Array(PLAYER_ID_BYTES);
   crypto.getRandomValues(bytes);
-  return bytesToHex(bytes);
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 /**
- * Validate player id format (64 hex characters)
+ * Validate player id format (43 URL-safe base64 characters)
  */
 export function isValidPlayerId(playerId: string): boolean {
-  return (
-    typeof playerId === "string" &&
-    playerId.length === PLAYER_ID_LENGTH &&
-    /^[0-9a-f]+$/.test(playerId)
-  );
+  if (
+    typeof playerId !== "string" ||
+    playerId.length !== PLAYER_ID_LENGTH ||
+    !/^[A-Za-z0-9_-]+$/.test(playerId)
+  ) {
+    return false;
+  }
+  // Verify it decodes to exactly 32 bytes
+  const bytes = decodeUrlSafeBase64(playerId);
+  return bytes !== null && bytes.length === PLAYER_ID_BYTES;
 }
 
 // =============================================================================
@@ -369,7 +364,10 @@ export async function deriveEncryptionKey(
   }
   throwIfAborted(signal);
 
-  const playerIdBytes = hexToBytes(playerId);
+  const playerIdBytes = decodeUrlSafeBase64(playerId);
+  if (!playerIdBytes) {
+    throw new Error("Failed to decode player ID");
+  }
   const encoder = new TextEncoder();
   const saltBytes = encoder.encode(PLAYER_ID_SALT);
 

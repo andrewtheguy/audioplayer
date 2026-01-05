@@ -104,10 +104,10 @@ describe("isValidSecondarySecret", () => {
 });
 
 describe("generatePlayerId", () => {
-  it("generates a 64-character hex string", () => {
+  it("generates a 43-character URL-safe base64 string", () => {
     const playerId = generatePlayerId();
-    expect(playerId).toHaveLength(64);
-    expect(playerId).toMatch(/^[0-9a-f]+$/);
+    expect(playerId).toHaveLength(43);
+    expect(playerId).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
   it("generates unique player IDs", () => {
@@ -135,14 +135,14 @@ describe("isValidPlayerId", () => {
   it("returns false for wrong length strings", () => {
     expect(isValidPlayerId("")).toBe(false);
     expect(isValidPlayerId("abc")).toBe(false);
-    expect(isValidPlayerId("a".repeat(63))).toBe(false); // 63 chars
-    expect(isValidPlayerId("a".repeat(65))).toBe(false); // 65 chars
+    expect(isValidPlayerId("a".repeat(42))).toBe(false); // 42 chars
+    expect(isValidPlayerId("a".repeat(44))).toBe(false); // 44 chars
   });
 
-  it("returns false for non-hex characters", () => {
-    expect(isValidPlayerId("g".repeat(64))).toBe(false);
-    expect(isValidPlayerId("z".repeat(64))).toBe(false);
-    expect(isValidPlayerId("G".repeat(64))).toBe(false); // uppercase
+  it("returns false for non-URL-safe-base64 characters", () => {
+    expect(isValidPlayerId("+".repeat(43))).toBe(false); // + is not URL-safe
+    expect(isValidPlayerId("/".repeat(43))).toBe(false); // / is not URL-safe
+    expect(isValidPlayerId("=".repeat(43))).toBe(false); // = is padding
   });
 
   it("returns false for non-string values", () => {
