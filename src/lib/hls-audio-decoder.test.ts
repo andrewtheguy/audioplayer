@@ -210,11 +210,10 @@ describe("HlsAudioDecoder", () => {
     });
 
     await decoder.load();
-    decoder.play();
     vi.useFakeTimers();
+    decoder.play();
     await vi.runOnlyPendingTimersAsync();
     vi.useRealTimers();
-
     expect(onEnded).not.toHaveBeenCalled();
     const sources = (decoder as unknown as { sources: MockSource[] }).sources;
     expect(sources.length).toBe(1);
@@ -246,8 +245,8 @@ describe("HlsAudioDecoder", () => {
     });
 
     await decoder.load();
-    decoder.play();
     vi.useFakeTimers();
+    decoder.play();
     await vi.runOnlyPendingTimersAsync();
     vi.useRealTimers();
 

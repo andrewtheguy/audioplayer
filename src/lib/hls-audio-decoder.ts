@@ -518,12 +518,32 @@ export class HlsAudioDecoder {
         attempt += 1;
         if (attempt >= MAX_SEGMENT_RETRIES) break;
         const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-        const deadline = Date.now() + delay;
-        while (Date.now() < deadline) {
+        const controller = new AbortController();
+        const { signal } = controller;
+        const timeoutId = window.setTimeout(() => controller.abort(), delay);
+        const cancelCheckId = window.setInterval(() => {
           if (token !== this.scheduleToken) {
-            throw new Error("Segment decode cancelled");
+            controller.abort();
           }
-          await new Promise((resolve) => setTimeout(resolve, 25));
+        }, 25);
+        try {
+          await new Promise<void>((resolve, reject) => {
+            if (signal.aborted) {
+              reject(new Error("Segment decode cancelled"));
+              return;
+            }
+            const onAbort = () => {
+              if (token !== this.scheduleToken) {
+                reject(new Error("Segment decode cancelled"));
+                return;
+              }
+              resolve();
+            };
+            signal.addEventListener("abort", onAbort, { once: true });
+          });
+        } finally {
+          clearTimeout(timeoutId);
+          clearInterval(cancelCheckId);
         }
       }
     }
