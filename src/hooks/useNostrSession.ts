@@ -95,12 +95,12 @@ export function useNostrSession({
   const [pubkeyHex, setPubkeyHex] = useState<string | null>(null);
   const [fingerprint, setFingerprint] = useState<string | null>(null);
 
-  // Player ID and keys
-  const [playerId, setPlayerId] = useState<string | null>(null);
-  const [encryptionKeys, setEncryptionKeys] = useState<{
-    privateKey: Uint8Array;
-    publicKey: string;
-  } | null>(null);
+  // Player ID and encryption keys (combined for atomic updates)
+  const [playerState, setPlayerState] = useState<{
+    playerId: string | null;
+    encryptionKeys: { privateKey: Uint8Array; publicKey: string } | null;
+  }>({ playerId: null, encryptionKeys: null });
+  const { playerId, encryptionKeys } = playerState;
 
   // Secondary secret
   const [secondarySecret, setSecondarySecretState] = useState<string | null>(null);
@@ -149,9 +149,8 @@ export function useNostrSession({
     if (initializingRef.current) return;
     initializingRef.current = true;
 
-    // Reset player state at start of initialization (atomic with re-init)
-    setPlayerId(null);
-    setEncryptionKeys(null);
+    // Reset player state at start of initialization (atomic)
+    setPlayerState({ playerId: null, encryptionKeys: null });
 
     try {
       // 1. Parse npub from URL path
@@ -197,8 +196,7 @@ export function useNostrSession({
         const remotePlayerId = await loadPlayerIdFromNostr(hex, cachedSecret);
         if (remotePlayerId && isValidPlayerId(remotePlayerId)) {
           const keys = await deriveEncryptionKey(remotePlayerId);
-          setPlayerId(remotePlayerId);
-          setEncryptionKeys(keys);
+          setPlayerState({ playerId: remotePlayerId, encryptionKeys: keys });
           setSessionStatus("idle");
           return;
         }
@@ -274,15 +272,13 @@ export function useNostrSession({
           // (unusual, but handle it)
           console.warn("Player ID changed on relay, re-initializing");
           const keys = await deriveEncryptionKey(remotePlayerId);
-          setPlayerId(remotePlayerId);
-          setEncryptionKeys(keys);
+          setPlayerState({ playerId: remotePlayerId, encryptionKeys: keys });
         }
       } catch (err) {
         if (err instanceof PlayerIdDecryptionError) {
           // Decryption failed - credentials were rotated
           console.warn("Player ID decryption failed - credentials rotated");
-          setPlayerId(null);
-          setEncryptionKeys(null);
+          setPlayerState({ playerId: null, encryptionKeys: null });
           setSecondarySecretState(null);
           clearSecondarySecret(fingerprint);
           setSessionStatus("needs_secret");
@@ -335,12 +331,10 @@ export function useNostrSession({
       try {
         const remotePlayerId = await loadPlayerIdFromNostr(pubkeyHex, secret);
         if (remotePlayerId && isValidPlayerId(remotePlayerId)) {
-          // Derive keys first to ensure consistent state
+          // Derive keys first, then set state atomically
           const keys = await deriveEncryptionKey(remotePlayerId);
-          // Success - now persist to localStorage and set state
           setSecondarySecret(fingerprint, secret);
-          setPlayerId(remotePlayerId);
-          setEncryptionKeys(keys);
+          setPlayerState({ playerId: remotePlayerId, encryptionKeys: keys });
           setSessionStatus("idle");
           setSessionNotice(null);
           return true;
@@ -444,8 +438,7 @@ export function useNostrSession({
 
       // Derive encryption keys first, then set state atomically
       const keys = await deriveEncryptionKey(newPlayerId);
-      setPlayerId(newPlayerId);
-      setEncryptionKeys(keys);
+      setPlayerState({ playerId: newPlayerId, encryptionKeys: keys });
 
       setSessionStatus("idle");
       setSessionNotice(null);
@@ -499,8 +492,7 @@ export function useNostrSession({
 
       // Derive encryption keys first, then set state atomically
       const keys = await deriveEncryptionKey(newPlayerId);
-      setPlayerId(newPlayerId);
-      setEncryptionKeys(keys);
+      setPlayerState({ playerId: newPlayerId, encryptionKeys: keys });
 
       setSessionStatus("idle");
       setSessionNotice("Player ID rotated. Previous history is no longer accessible.");
