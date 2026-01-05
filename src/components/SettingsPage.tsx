@@ -87,6 +87,7 @@ export function SettingsPage() {
     setNewSecondarySecret(newSecret);
     setMessage(`Rotation complete for ${npub.slice(0, 12)}...`);
     setNsecInput("");
+    setDerivedNpub(null);
   };
 
   return (
