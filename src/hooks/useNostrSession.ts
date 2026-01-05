@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getPublicKey } from "nostr-tools/pure";
 import {
-  parseNpubFromHash,
+  parseNpub,
   decodeNsec,
   generatePlayerId,
   isValidPlayerId,
@@ -73,10 +73,11 @@ interface UseNostrSessionResult {
 
 const DEFAULT_TAKEOVER_GRACE_MS = 15000;
 
-function getNpubFromHash(): string | null {
+function getNpubFromPath(): string | null {
   if (typeof window === "undefined") return null;
-  const hash = window.location.hash;
-  const npub = hash.startsWith("#") ? hash.slice(1) : hash;
+  // Extract npub from pathname: /npub1... -> npub1...
+  const pathname = window.location.pathname;
+  const npub = pathname.startsWith("/") ? pathname.slice(1) : pathname;
   if (!npub || !npub.startsWith("npub1")) {
     return null;
   }
@@ -142,14 +143,14 @@ export function useNostrSession({
     };
   }, [sessionStatus]);
 
-  // Initialize session on mount and hash changes
+  // Initialize session on mount and path changes
   const initializeSession = useCallback(async () => {
     if (initializingRef.current) return;
     initializingRef.current = true;
 
     try {
-      // 1. Parse npub from URL hash
-      const currentNpub = getNpubFromHash();
+      // 1. Parse npub from URL path
+      const currentNpub = getNpubFromPath();
       if (!currentNpub) {
         setNpub(null);
         setPubkeyHex(null);
@@ -162,7 +163,7 @@ export function useNostrSession({
       }
 
       // 2. Validate and decode npub
-      const hex = parseNpubFromHash(currentNpub);
+      const hex = parseNpub(currentNpub);
       if (!hex) {
         setNpub(currentNpub);
         setPubkeyHex(null);
@@ -231,20 +232,20 @@ export function useNostrSession({
     initializeSession();
   }, [initializeSession]);
 
-  // Listen for hash changes
+  // Listen for path changes (browser back/forward)
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const handleHashChange = () => {
+    const handlePopState = () => {
       // Reset state and re-initialize
       setPlayerId(null);
       setEncryptionKeys(null);
       initializeSession();
     };
 
-    window.addEventListener("hashchange", handleHashChange);
+    window.addEventListener("popstate", handlePopState);
     return () => {
-      window.removeEventListener("hashchange", handleHashChange);
+      window.removeEventListener("popstate", handlePopState);
     };
   }, [initializeSession]);
 
@@ -255,9 +256,9 @@ export function useNostrSession({
   }> => {
     const keypair = generateNostrKeypair();
 
-    // Set the npub in URL hash
+    // Set the npub in URL path
     if (typeof window !== "undefined") {
-      window.location.hash = keypair.npub;
+      window.history.pushState(null, "", `/${keypair.npub}`);
     }
 
     return {

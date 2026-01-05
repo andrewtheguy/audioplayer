@@ -9,7 +9,7 @@ This is an audio player built with React and TypeScript that supports cross-devi
 The application uses a layered key architecture for identity and encryption:
 
 ```
-URL: #npub1abc...xyz
+URL: /npub1abc...xyz
         │
         ▼
 ┌──────────────────┐
@@ -364,7 +364,7 @@ Cryptographic utilities for secure sync.
 - `isValidSecondarySecret(secret)`: Validates length, format, and checksum
 
 **npub/nsec utilities:**
-- `parseNpubFromHash(hash)`: Extracts and validates npub from URL hash, returns hex pubkey
+- `parseNpub(npub)`: Validates npub and returns hex pubkey
 - `decodeNsec(nsec)`: Decodes nsec to private key bytes
 - `generateNostrKeypair()`: Creates new npub/nsec keypair
 
@@ -384,43 +384,36 @@ Cryptographic utilities for secure sync.
 
 ## Security Model
 
-1. **npub-based Identity**: URL hash contains public key (npub), safe to share
+1. **npub-based Identity**: URL path contains public key (npub), safe to share
 2. **Secondary Secret**: Per-device secret encrypts player ID only
 3. **Player ID Derived Keys**: History encrypted AND signed with keys derived from player ID
 4. **End-to-End Encryption**: History is encrypted before leaving the device
 5. **No Server Trust**: Relays only see encrypted blobs
 6. **Session Ownership**: Session ID prevents simultaneous edits
 
-```
-URL: https://app.example.com/#npub1abc...
-                               │
-                    parseNpubFromHash()
-                               │
-              ┌────────────────┴────────────────┐
-              ▼                                 ▼
-          invalid                            valid
-    (show error, block sync)                   │
-                                               ▼
-                                    getSecondarySecret()
-                                               │
-                              ┌────────────────┴────────────────┐
-                              ▼                                 ▼
-                         missing                            present
-                    (prompt user entry)                        │
-                                               ▼
-                                    loadPlayerIdFromNostr()
-                                               │
-                              ┌────────────────┴────────────────┐
-                              ▼                                 ▼
-                      not found                              found
-                (needs nsec for setup)                         │
-                                               ▼
-                                    deriveEncryptionKey(playerId)
-                                               │
-                              ┌────────────────┴────────────────┐
-                              ▼                                 ▼
-                        privateKey                         publicKey
-                  (decrypt/sign history)              (encrypt/query history)
+```mermaid
+flowchart TD
+    URL["URL: /npub1abc..."] --> parseNpub["parseNpub()"]
+    parseNpub --> invalid["Invalid"]
+    parseNpub --> valid["Valid"]
+
+    invalid --> errorBlock["Show error, block sync"]
+
+    valid --> getSecret["getSecondarySecret()"]
+    getSecret --> missing["Missing"]
+    getSecret --> present["Present"]
+
+    missing --> promptUser["Prompt user entry"]
+
+    present --> loadPlayerId["loadPlayerIdFromNostr()"]
+    loadPlayerId --> notFound["Not found"]
+    loadPlayerId --> found["Found"]
+
+    notFound --> needsNsec["Needs nsec for setup"]
+
+    found --> deriveKey["deriveEncryptionKey(playerId)"]
+    deriveKey --> privateKey["privateKey<br/>(decrypt/sign history)"]
+    deriveKey --> publicKey["publicKey<br/>(encrypt/query history)"]
 ```
 
 ## Resilience & Error Handling

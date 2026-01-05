@@ -277,10 +277,9 @@ export async function decryptWithSecondarySecret(
 // =============================================================================
 
 /**
- * Parse npub from URL hash and return hex public key, or null if invalid
+ * Parse npub string and return hex public key, or null if invalid
  */
-export function parseNpubFromHash(hash: string): string | null {
-  const npub = hash.startsWith("#") ? hash.slice(1) : hash;
+export function parseNpub(npub: string): string | null {
   if (!npub || !npub.startsWith("npub1")) {
     return null;
   }
@@ -303,7 +302,7 @@ export function parseNpubFromHash(hash: string): string | null {
  * Validate npub format
  */
 export function isValidNpub(npub: string): boolean {
-  return parseNpubFromHash(npub) !== null;
+  return parseNpub(npub) !== null;
 }
 
 /**
