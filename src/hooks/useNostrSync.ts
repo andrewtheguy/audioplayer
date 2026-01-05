@@ -491,9 +491,14 @@ export function useNostrSync({
   // Handle remote events
   const handleRemoteEvent = useCallback(
     (payload: HistoryPayload) => {
+      // Ignore events while we're publishing to avoid processing our own echoed events
+      if (pendingPublishRef.current || isLocalChangeRef.current) return;
+      // Ignore our own events
       if (payload.sessionId && payload.sessionId === localSessionId) return;
+      // Ignore stale events (already processed or older than our last save)
       if (payload.timestamp <= latestTimestampRef.current) return;
       latestTimestampRef.current = payload.timestamp;
+      // Ignore during takeover grace period
       if (Date.now() < ignoreRemoteUntilRef.current) return;
 
       if (payload.sessionId && payload.sessionId !== localSessionId) {
@@ -503,13 +508,11 @@ export function useNostrSync({
         }
       }
 
-      if (!isLocalChangeRef.current) {
-        const result = mergeHistory(historyRef.current, payload.history);
-        skipNextDirtyRef.current = true;
-        onHistoryLoadedRef.current(result.merged);
-        if (sessionStatusRef.current === "stale" || sessionStatusRef.current === "idle") {
-          onRemoteSyncRef.current?.(result.merged);
-        }
+      const result = mergeHistory(historyRef.current, payload.history);
+      skipNextDirtyRef.current = true;
+      onHistoryLoadedRef.current(result.merged);
+      if (sessionStatusRef.current === "stale" || sessionStatusRef.current === "idle") {
+        onRemoteSyncRef.current?.(result.merged);
       }
     },
     [localSessionId, setSessionNotice, setSessionStatus]
