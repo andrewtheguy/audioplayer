@@ -22,6 +22,7 @@ type DecoderCallbacks = {
 };
 
 const BUFFER_AHEAD_SECONDS = 20;
+const MAX_BUFFERED_SECONDS = 60;
 const START_DELAY_SECONDS = 0.12;
 
 function resolveUrl(base: string, relative: string): string {
@@ -252,7 +253,7 @@ export class HlsAudioDecoder {
         if (token !== this.scheduleToken) {
           break;
         }
-        if (this.scheduleCursor - this.ctx.currentTime > BUFFER_AHEAD_SECONDS) {
+        if (this.scheduleCursor - this.ctx.currentTime > Math.min(BUFFER_AHEAD_SECONDS, MAX_BUFFERED_SECONDS)) {
           await new Promise((resolve) => setTimeout(resolve, 250));
           continue;
         }
@@ -324,12 +325,15 @@ export class HlsAudioDecoder {
         if (token !== this.scheduleToken) {
           break;
         }
-        if (this.scheduleCursor - this.ctx.currentTime > BUFFER_AHEAD_SECONDS) {
+        if (this.scheduleCursor - this.ctx.currentTime > Math.min(BUFFER_AHEAD_SECONDS, MAX_BUFFERED_SECONDS)) {
           await new Promise((resolve) => setTimeout(resolve, 250));
           continue;
         }
         const segment = this.liveQueue.shift();
         if (!segment) {
+          if (this.scheduleCursor + this.targetDuration < this.ctx.currentTime) {
+            await this.resetLiveWindow();
+          }
           await new Promise((resolve) => setTimeout(resolve, 250));
           continue;
         }
@@ -412,8 +416,7 @@ export class HlsAudioDecoder {
     const lastSequence = typeof lastSegment.sequence === "number" ? lastSegment.sequence : null;
 
     if (initial || this.lastSequenceSeen === null) {
-      const startIndex = Math.max(0, segments.length - 3);
-      this.liveQueue = segments.slice(startIndex);
+      this.liveQueue = this.trimLiveQueue(segments);
       this.lastSequenceSeen = lastSequence;
       return;
     }
@@ -423,9 +426,45 @@ export class HlsAudioDecoder {
       return this.lastSequenceSeen === null || seg.sequence > this.lastSequenceSeen;
     });
     if (newSegments.length > 0) {
+      const firstNew = newSegments[0];
+      if (typeof firstNew.sequence === "number" && this.lastSequenceSeen !== null) {
+        if (firstNew.sequence > this.lastSequenceSeen + 1) {
+          await this.resetLiveWindow();
+          return;
+        }
+      }
       this.liveQueue.push(...newSegments);
+      this.liveQueue = this.trimLiveQueue(this.liveQueue);
       this.lastSequenceSeen = lastSequence;
     }
+  }
+
+  private trimLiveQueue(segments: Segment[]): Segment[] {
+    let total = 0;
+    const trimmed: Segment[] = [];
+    for (let i = segments.length - 1; i >= 0; i -= 1) {
+      const segment = segments[i];
+      const duration = Math.max(0, segment.duration);
+      if (total + duration > MAX_BUFFERED_SECONDS && trimmed.length > 0) {
+        break;
+      }
+      trimmed.push(segment);
+      total += duration;
+    }
+    return trimmed.reverse();
+  }
+
+  private async resetLiveWindow(): Promise<void> {
+    this.scheduleToken += 1;
+    this.stopSources();
+    this.scheduling = false;
+    this.liveQueue = [];
+    this.lastSequenceSeen = null;
+    this.startCtxTime = this.ctx.currentTime + START_DELAY_SECONDS;
+    this.scheduleCursor = this.startCtxTime;
+    await this.refreshLivePlaylist(true);
+    this.scheduleToken += 1;
+    void this.scheduleLiveLoop(this.scheduleToken);
   }
 
   private findSegmentIndex(time: number): number {
