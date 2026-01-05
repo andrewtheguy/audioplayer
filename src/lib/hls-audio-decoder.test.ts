@@ -100,6 +100,7 @@ describe("HlsAudioDecoder", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     globalThis.fetch = originalFetch;
     globalThis.requestAnimationFrame = originalRAF;
     globalThis.cancelAnimationFrame = originalCAF;
@@ -210,7 +211,9 @@ describe("HlsAudioDecoder", () => {
 
     await decoder.load();
     decoder.play();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    vi.useFakeTimers();
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
 
     expect(onEnded).not.toHaveBeenCalled();
     const sources = (decoder as unknown as { sources: MockSource[] }).sources;
@@ -244,7 +247,9 @@ describe("HlsAudioDecoder", () => {
 
     await decoder.load();
     decoder.play();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    vi.useFakeTimers();
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
 
     const sources = (decoder as unknown as { sources: MockSource[] }).sources;
     expect(sources.length).toBe(1);

@@ -271,6 +271,7 @@ export class HlsAudioDecoder {
           this.consecutiveFailures += 1;
           if (this.consecutiveFailures >= FAILURE_RESET_THRESHOLD) {
             await this.resetVodWindow();
+            break;
           }
           this.pause();
           break;
@@ -360,6 +361,7 @@ export class HlsAudioDecoder {
           this.consecutiveFailures += 1;
           if (this.consecutiveFailures >= FAILURE_RESET_THRESHOLD) {
             await this.resetLiveWindow();
+            break;
           }
           this.pause();
           break;
