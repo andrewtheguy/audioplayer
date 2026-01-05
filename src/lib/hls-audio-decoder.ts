@@ -23,6 +23,9 @@ type DecoderCallbacks = {
 
 const BUFFER_AHEAD_SECONDS = 20;
 const MAX_BUFFERED_SECONDS = 60;
+const MAX_SEGMENT_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 300;
+const FAILURE_RESET_THRESHOLD = 5;
 const START_DELAY_SECONDS = 0.12;
 
 function resolveUrl(base: string, relative: string): string {
@@ -108,6 +111,7 @@ export class HlsAudioDecoder {
   private liveQueue: Segment[] = [];
   private pollTimer: number | null = null;
   private lastSequenceSeen: number | null = null;
+  private consecutiveFailures = 0;
   private sources: AudioBufferSourceNode[] = [];
   private timeRaf: number | null = null;
   private scheduling = false;
@@ -261,13 +265,18 @@ export class HlsAudioDecoder {
         const segment = this.segments[this.nextSegmentIndex];
         let buffer: AudioBuffer;
         try {
-      buffer = await this.decodeSegment(segment.url);
-    } catch (err) {
-      this.callbacks.onError(`Failed to decode segment: ${segment.url} (${(err as Error).message})`);
-      this.pause();
-      break;
-    }
+          buffer = await this.decodeSegmentWithRetry(segment.url, token);
+        } catch (err) {
+          this.callbacks.onError(`Failed to decode segment: ${segment.url} (${(err as Error).message})`);
+          this.consecutiveFailures += 1;
+          if (this.consecutiveFailures >= FAILURE_RESET_THRESHOLD) {
+            await this.resetVodWindow();
+          }
+          this.pause();
+          break;
+        }
 
+        this.consecutiveFailures = 0;
         if (!this.isPlaying || token !== this.scheduleToken) break;
 
         const source = this.ctx.createBufferSource();
@@ -347,13 +356,18 @@ export class HlsAudioDecoder {
 
         let buffer: AudioBuffer;
         try {
-          buffer = await this.decodeSegment(segment.url);
+          buffer = await this.decodeSegmentWithRetry(segment.url, token);
         } catch (err) {
           this.callbacks.onError(`Failed to decode segment: ${segment.url} (${(err as Error).message})`);
+          this.consecutiveFailures += 1;
+          if (this.consecutiveFailures >= FAILURE_RESET_THRESHOLD) {
+            await this.resetLiveWindow();
+          }
           this.pause();
           break;
         }
 
+        this.consecutiveFailures = 0;
         if (!this.isPlaying || token !== this.scheduleToken) break;
 
         const source = this.ctx.createBufferSource();
@@ -472,6 +486,37 @@ export class HlsAudioDecoder {
     await this.refreshLivePlaylist(true);
     this.scheduleToken += 1;
     void this.scheduleLiveLoop(this.scheduleToken);
+  }
+
+  private async resetVodWindow(): Promise<void> {
+    if (!this.isPlaying || this.mode !== "vod") return;
+    const nextToken = this.scheduleToken + 1;
+    this.scheduleToken = nextToken;
+    this.stopSources();
+    this.scheduling = false;
+    this.startCtxTime = this.ctx.currentTime + START_DELAY_SECONDS;
+    this.scheduleCursor = this.startCtxTime;
+    this.startScheduling(this.currentTime);
+  }
+
+  private async decodeSegmentWithRetry(url: string, token: number): Promise<AudioBuffer> {
+    let attempt = 0;
+    let lastError: Error | null = null;
+    while (attempt < MAX_SEGMENT_RETRIES) {
+      if (token !== this.scheduleToken) {
+        throw new Error("Segment decode cancelled");
+      }
+      try {
+        return await this.decodeSegment(url);
+      } catch (err) {
+        lastError = err as Error;
+        attempt += 1;
+        if (attempt >= MAX_SEGMENT_RETRIES) break;
+        const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+    throw lastError ?? new Error("Segment decode failed");
   }
 
   private findSegmentIndex(time: number): number {
