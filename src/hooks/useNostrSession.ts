@@ -3,6 +3,7 @@ import { getPublicKey } from "nostr-tools/pure";
 import {
   parseNpub,
   decodeNsec,
+  encodeNpub,
   generatePlayerId,
   isValidPlayerId,
   generateSecondarySecret,
@@ -250,17 +251,12 @@ export function useNostrSession({
   }, [initializeSession]);
 
   // Generate new identity (npub/nsec pair)
+  // Note: Does NOT set the URL - that happens in setupWithNsec after user confirms
   const generateNewIdentity = useCallback(async (): Promise<{
     npub: string;
     nsec: string;
   }> => {
     const keypair = generateNostrKeypair();
-
-    // Set the npub in URL path
-    if (typeof window !== "undefined") {
-      window.history.pushState(null, "", `/${keypair.npub}`);
-    }
-
     return {
       npub: keypair.npub,
       nsec: keypair.nsec,
@@ -332,26 +328,22 @@ export function useNostrSession({
         return false;
       }
 
-      // Derive pubkey from nsec
+      // Derive pubkey and npub from nsec
       const derivedPubkey = getPublicKey(privateKeyBytes);
+      const derivedNpub = encodeNpub(derivedPubkey);
 
-      // Get expected pubkey from URL (handles stale React state after pushState)
+      // Check if there's already an npub in URL - if so, verify it matches
       const currentNpub = getNpubFromPath();
-      const expectedPubkey = currentNpub ? parseNpub(currentNpub) : pubkeyHex;
-
-      if (!expectedPubkey) {
-        setSessionNotice("No identity in URL.");
-        return false;
+      if (currentNpub) {
+        const currentPubkey = parseNpub(currentNpub);
+        if (currentPubkey && currentPubkey !== derivedPubkey) {
+          setSessionNotice("nsec does not match this identity.");
+          return false;
+        }
       }
 
-      // Verify nsec matches the npub in URL
-      if (derivedPubkey !== expectedPubkey) {
-        setSessionNotice("nsec does not match this identity.");
-        return false;
-      }
-
-      // Compute fingerprint on-the-fly if React state is stale
-      const fp = fingerprint ?? (await getStorageScope(expectedPubkey));
+      // Compute fingerprint
+      const fp = fingerprint ?? (await getStorageScope(derivedPubkey));
 
       // Use provided secret or existing or generate new
       let secret = newSecondarySecret;
@@ -381,7 +373,7 @@ export function useNostrSession({
           newPlayerId,
           secret,
           privateKeyBytes,
-          expectedPubkey
+          derivedPubkey
         );
       } catch (err) {
         setSessionNotice(
@@ -391,9 +383,14 @@ export function useNostrSession({
         return false;
       }
 
-      // Update React state to match URL (in case it was stale)
-      setNpub(currentNpub);
-      setPubkeyHex(expectedPubkey);
+      // Set URL to npub (after successful publish)
+      if (typeof window !== "undefined" && window.location.pathname !== `/${derivedNpub}`) {
+        window.history.pushState(null, "", `/${derivedNpub}`);
+      }
+
+      // Update React state
+      setNpub(derivedNpub);
+      setPubkeyHex(derivedPubkey);
       setFingerprint(fp);
 
       // Set player id and derive encryption keys
@@ -407,7 +404,7 @@ export function useNostrSession({
 
       return true;
     },
-    [pubkeyHex, fingerprint, secondarySecret]
+    [fingerprint, secondarySecret]
   );
 
   // Rotate player id

@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RELAYS } from "@/lib/nostr-sync";
 import { getStorageScope } from "@/lib/identity";
-import { generateSecondarySecret } from "@/lib/nostr-crypto";
+import { generateSecondarySecret, parseNpub } from "@/lib/nostr-crypto";
 import { cn } from "@/lib/utils";
 import {
   useNostrSession,
@@ -40,6 +40,7 @@ export function NostrSyncPanel({
   // Input states
   const [secondarySecretInput, setSecondarySecretInput] = useState("");
   const [nsecInput, setNsecInput] = useState("");
+  const [npubInput, setNpubInput] = useState("");
   const [generatedIdentity, setGeneratedIdentity] = useState<{ npub: string; nsec: string; secondarySecret: string } | null>(null);
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
   // Generation flow: show_credentials -> done
@@ -180,6 +181,29 @@ export function NostrSyncPanel({
     }
   };
 
+  const handleNavigateToNpub = () => {
+    const trimmed = npubInput.trim();
+    if (!trimmed.startsWith("npub1")) {
+      setSessionNotice("Invalid npub format. Must start with 'npub1'.");
+      return;
+    }
+    if (!parseNpub(trimmed)) {
+      setSessionNotice("Invalid npub format.");
+      return;
+    }
+    // Navigate to the npub
+    window.history.pushState(null, "", `/${trimmed}`);
+    setNpubInput("");
+    // Trigger a popstate-like re-initialization by dispatching the event
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  };
+
+  const handleBackToHome = () => {
+    window.history.pushState(null, "", "/");
+    // Trigger re-initialization
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  };
+
   const handleSubmitSecondarySecret = async () => {
     const result = await submitSecondarySecret(secondarySecretInput.trim());
     if (result) {
@@ -307,7 +331,7 @@ export function NostrSyncPanel({
         return (
           <div className="space-y-3">
             <div className="text-xs text-muted-foreground">
-              Generate a new identity to sync your playback history across devices.
+              Generate a new identity or enter an existing npub to sync your playback history across devices.
             </div>
             <Button
               size="sm"
@@ -317,6 +341,33 @@ export function NostrSyncPanel({
             >
               Generate New Identity
             </Button>
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-background px-2 text-muted-foreground">Or</span>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Input
+                type="text"
+                value={npubInput}
+                onChange={(e) => setNpubInput(e.target.value)}
+                placeholder="npub1..."
+                className="h-8 text-xs font-mono"
+                onKeyDown={(e) => e.key === "Enter" && npubInput.trim() && handleNavigateToNpub()}
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleNavigateToNpub}
+                disabled={!npubInput.trim()}
+                className="w-full h-8 text-xs"
+              >
+                Use Existing Identity
+              </Button>
+            </div>
           </div>
         );
 
@@ -334,15 +385,25 @@ export function NostrSyncPanel({
               className="h-8 text-xs font-mono"
               onKeyDown={(e) => e.key === "Enter" && handleSubmitSecondarySecret()}
             />
-            <Button
-              size="sm"
-              variant="default"
-              onClick={handleSubmitSecondarySecret}
-              disabled={isLoading || !secondarySecretInput.trim()}
-              className="w-full h-8 text-xs"
-            >
-              Unlock
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="default"
+                onClick={handleSubmitSecondarySecret}
+                disabled={isLoading || !secondarySecretInput.trim()}
+                className="flex-1 h-8 text-xs"
+              >
+                Unlock
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleBackToHome}
+                className="h-8 text-xs"
+              >
+                Back
+              </Button>
+            </div>
           </div>
         );
 
