@@ -41,6 +41,12 @@ iOS Safari routes native HLS playback outside the Web Audio graph, so GainNode a
 
 This path is only used for iOS Safari + `.m3u8` URLs; all other browsers use the native `<audio>` element with hls.js.
 
+Additional tradeoffs and safeguards:
+
+- **Memory tradeoffs:** decoded segments are held as `AudioBuffer`s and scheduled via `AudioBufferSourceNode`s. Memory per segment varies by duration/sample rate/bit depth; measure with the browser’s memory tools and estimate roughly as `seconds * sampleRate * channels * 4 bytes` for PCM. Long-running or live streams can grow without bounds unless you cap retention. Recommended strategies: cap total buffered seconds (e.g., 12–24s), discard oldest buffers (LRU-style) beyond the cap, or downsample/trim older buffers to limit memory.
+- **Browser detection:** current selection uses UA sniffing (iOS + Safari). Checks are: iOS detection via `/iP(hone|od|ad)/` or `navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1`, and Safari detection via `/Safari/` without `CriOS|FxiOS|EdgiOS|OPiOS`. Caveat: UA strings change; iOS requires WebKit for all browsers, so Safari detection is heuristic. Prefer feature detection where possible and fall back to guarded UA checks with telemetry to verify behavior.
+- **Failure recovery:** if segment fetch/transmux/decode fails, log metrics, retry with bounded backoff (e.g., 2–3 retries per segment, then drop), and clear/repair the AudioBuffer queue by resetting the live window. If repeated failures exceed a threshold (e.g., 5 consecutive failures or >10% of segments in 1 minute), optionally fall back to native `<audio>` if available and surface a user-visible error.
+
 ### NostrSyncPanel (`components/NostrSyncPanel.tsx`)
 
 Orchestrates cross-device synchronization by connecting session management with sync logic:

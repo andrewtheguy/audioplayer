@@ -130,10 +130,18 @@ function AudioPlayerInner({
     return isIOS && isSafari;
   }, []);
 
-  const shouldUseDecodedHls = useCallback(
-    (nextUrl: string) => isIOSSafari && nextUrl.includes(".m3u8"),
-    [isIOSSafari]
-  );
+  const shouldUseDecodedHls = useCallback((nextUrl: string) => {
+    if (!isIOSSafari) return false;
+    try {
+      const parsed = new URL(nextUrl);
+      const pathname = parsed.pathname.toLowerCase();
+      if (pathname.endsWith(".m3u8")) return true;
+      const format = parsed.searchParams.get("format");
+      return format === "m3u8" || format === "hls";
+    } catch {
+      return false;
+    }
+  }, [isIOSSafari]);
 
 
   // Keep refs in sync with state for use in callbacks
