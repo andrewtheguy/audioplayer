@@ -88,7 +88,7 @@ Manages identity, player ID, and session state:
 **Key actions:**
 - `submitSecondarySecret(secret)`: Stores secret, attempts to load player ID from relay
 - `setupWithNsec(nsec)`: Creates new player ID, encrypts with secondary secret, signs and publishes
-- `rotatePlayerId(nsec)`: Generates new player ID (no migration; old history becomes inaccessible)
+- `rotatePlayerId(nsec)`: Generates a new player ID and secondary secret; migrates history to the new ID when the current secondary secret is provided (skipping it discards old history)
 - `generateNewIdentity()`: Creates new npub/nsec pair
 
 ### useNostrSync (`hooks/useNostrSync.ts`)

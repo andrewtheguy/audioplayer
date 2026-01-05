@@ -7,7 +7,7 @@ A web-based audio player supporting standard audio formats and HLS streaming, bu
 - **Audio Playback** - Play standard audio URLs (MP3, etc.) and HLS streams (.m3u8)
 - **Playback Controls** - Play/pause, seek forward (+30s), seek backward (-15s), with iOS/Android lock screen integration via Media Session API
 - **Progress Bar** - Visual progress with seekable slider, displays time in HH:MM:SS format
-- **Volume Control** - Adjustable volume slider
+- **Boost Control** - Optional gain boost slider (up to ~300%) instead of a base volume slider
 - **URL History** - Automatically saves played URLs to localStorage
   - Stores last played position for each URL
   - Resume playback from where you left off
@@ -83,12 +83,12 @@ npm run preview
 
 ## Usage
 
-1. Enter an audio URL (MP3, HLS .m3u8, etc.) in the input field
-2. Click "Load" or press Enter to load the stream
-3. Use the play button to start playback
-4. Use -15s and +30s buttons to seek
-5. Adjust volume with the volume slider
-6. Click on history items to reload and resume from saved position
+1. Start a session: either generate a new identity (npub/nsec + secondary secret) or navigate to an existing `/:npub`, enter the secondary secret, and click **Start Session**.
+2. Once the session is **active**, the load inputs appear. Enter an audio URL (MP3, HLS .m3u8, etc.) and click **Load**.
+3. Use the play button to start playback.
+4. Use -15s and +30s buttons to seek (disabled for live streams).
+5. Optionally enable **Boost** to raise output above 100% and adjust the boost slider.
+6. Click on history items to reload and resume from the saved position (scoped per npub).
 
 ## Example Audio URLs
 
