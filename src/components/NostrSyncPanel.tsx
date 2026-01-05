@@ -5,6 +5,7 @@ import { RELAYS } from "@/lib/nostr-sync";
 import { getStorageScope } from "@/lib/identity";
 import { generateSecondarySecret, parseNpub } from "@/lib/nostr-crypto";
 import { cn } from "@/lib/utils";
+import { navigate, navigateReplace } from "@/lib/navigation";
 import {
   useNostrSession,
   type SessionStatus,
@@ -174,7 +175,7 @@ export function NostrSyncPanel({
     if (typeof window !== "undefined") {
       const needsCleanup = window.location.pathname !== "/" || window.location.hash;
       if (needsCleanup) {
-        window.history.replaceState(null, "", "/");
+        navigateReplace("/");
       }
     }
   };
@@ -189,17 +190,12 @@ export function NostrSyncPanel({
       setSessionNotice("Invalid npub format.");
       return;
     }
-    // Navigate to the npub
-    window.history.pushState(null, "", `/${trimmed}`);
     setNpubInput("");
-    // Trigger a popstate-like re-initialization by dispatching the event
-    window.dispatchEvent(new PopStateEvent("popstate"));
+    navigate(`/${trimmed}`);
   };
 
   const handleBackToHome = () => {
-    window.history.pushState(null, "", "/");
-    // Trigger re-initialization
-    window.dispatchEvent(new PopStateEvent("popstate"));
+    navigate("/");
   };
 
   const handleSubmitSecondarySecret = async () => {

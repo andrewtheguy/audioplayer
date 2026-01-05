@@ -10,6 +10,7 @@ import {
 } from "@/lib/nostr-crypto";
 import { clearSecondarySecret, getStorageScope } from "@/lib/identity";
 import { publishPlayerIdToNostr } from "@/lib/nostr-sync";
+import { navigate } from "@/lib/navigation";
 
 export function SettingsPage() {
   const [nsecInput, setNsecInput] = useState("");
@@ -40,8 +41,7 @@ export function SettingsPage() {
   };
 
   const handleBackToHome = () => {
-    window.history.pushState(null, "", "/");
-    window.dispatchEvent(new PopStateEvent("popstate"));
+    navigate("/");
   };
 
   const handleRotatePlayerId = async () => {

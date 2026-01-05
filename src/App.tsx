@@ -11,11 +11,15 @@ function App() {
   const [route, setRoute] = useState<"player" | "settings">(getRoute);
 
   useEffect(() => {
-    const handlePopState = () => {
+    const handleRouteChange = () => {
       setRoute(getRoute());
     };
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
+    window.addEventListener("popstate", handleRouteChange);
+    window.addEventListener("routechange", handleRouteChange);
+    return () => {
+      window.removeEventListener("popstate", handleRouteChange);
+      window.removeEventListener("routechange", handleRouteChange);
+    };
   }, []);
 
   if (route === "settings") {
