@@ -467,11 +467,21 @@ export function useNostrSync({
         onHistoryLoadedRef.current(result.merged);
         setStatus("success");
         setMessage(`Loaded ${cloudHistory.length} entries`);
+        dirtyRef.current = false;
       } else {
-        setStatus("success");
-        setMessage("No synced history found.");
+        // No remote history found - sync local history to Nostr if we have any
+        const localHistory = historyRef.current;
+        if (localHistory.length > 0) {
+          setStatus("success");
+          setMessage(`Syncing ${localHistory.length} local entries...`);
+          dirtyRef.current = false;
+          void performSave(localHistory, { allowStale: true });
+        } else {
+          setStatus("success");
+          setMessage("No synced history found.");
+          dirtyRef.current = false;
+        }
       }
-      dirtyRef.current = false;
     } catch (err) {
       if (!isActive()) return;
       setStatus("error");
@@ -481,7 +491,7 @@ export function useNostrSync({
         setMessage(err instanceof Error ? err.message : "Failed to load");
       }
     }
-  }, [canSync, isActive, operationTimeoutMs]);
+  }, [canSync, isActive, operationTimeoutMs, performSave]);
 
   const startSession = useCallback(async () => {
     if (!canSync() || !isActive()) return;
