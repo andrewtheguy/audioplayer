@@ -1,6 +1,7 @@
 /**
- * Identity management: npub/nsec handling, player id caching
+ * Identity management: npub/nsec handling
  * All localStorage keys are scoped by npub fingerprint for isolation
+ * Note: Player ID is not cached locally - it's always fetched from relay
  */
 
 const STORAGE_PREFIX = "com.audioplayer";
@@ -54,38 +55,6 @@ export function setSecondarySecret(fingerprint: string, secret: string): void {
 export function clearSecondarySecret(fingerprint: string): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(getSecondarySecretKey(fingerprint));
-}
-
-// =============================================================================
-// Player ID Cache
-// =============================================================================
-
-function getPlayerIdKey(fingerprint: string): string {
-  return `${STORAGE_PREFIX}.playerid.${fingerprint}`;
-}
-
-/**
- * Get cached player id from localStorage
- */
-export function getCachedPlayerId(fingerprint: string): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(getPlayerIdKey(fingerprint));
-}
-
-/**
- * Cache player id to localStorage
- */
-export function cachePlayerId(fingerprint: string, playerId: string): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(getPlayerIdKey(fingerprint), playerId);
-}
-
-/**
- * Clear cached player id from localStorage
- */
-export function clearCachedPlayerId(fingerprint: string): void {
-  if (typeof window === "undefined") return;
-  localStorage.removeItem(getPlayerIdKey(fingerprint));
 }
 
 // =============================================================================
@@ -156,7 +125,6 @@ export function getHistoryTimestampStorageKey(fingerprint: string): string {
 export function clearAllIdentityData(fingerprint: string): void {
   if (typeof window === "undefined") return;
   clearSecondarySecret(fingerprint);
-  clearCachedPlayerId(fingerprint);
   clearNsec(fingerprint);
   localStorage.removeItem(getHistoryKey(fingerprint));
   localStorage.removeItem(getHistoryTimestampKey(fingerprint));

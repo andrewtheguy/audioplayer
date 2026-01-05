@@ -14,10 +14,7 @@ import {
   getNpubFingerprint,
   getSecondarySecret,
   setSecondarySecret,
-  getCachedPlayerId,
-  cachePlayerId,
   storeNsec,
-  clearCachedPlayerId,
 } from "@/lib/identity";
 import {
   checkPlayerIdEventExists,
@@ -188,24 +185,12 @@ export function useNostrSession({
 
       setSecondarySecretState(cachedSecret);
 
-      // 5. Check for cached player id
-      const cachedPlayerId = getCachedPlayerId(fp);
-      if (cachedPlayerId && isValidPlayerId(cachedPlayerId)) {
-        setPlayerId(cachedPlayerId);
-        // Derive encryption keys
-        const keys = await deriveEncryptionKey(cachedPlayerId);
-        setEncryptionKeys(keys);
-        setSessionStatus("idle");
-        return;
-      }
-
-      // 6. Try to load player id from relay
+      // 5. Try to load player id from relay
       setSessionStatus("loading");
       try {
         const remotePlayerId = await loadPlayerIdFromNostr(hex, cachedSecret);
         if (remotePlayerId && isValidPlayerId(remotePlayerId)) {
           setPlayerId(remotePlayerId);
-          cachePlayerId(fp, remotePlayerId);
           const keys = await deriveEncryptionKey(remotePlayerId);
           setEncryptionKeys(keys);
           setSessionStatus("idle");
@@ -216,7 +201,7 @@ export function useNostrSession({
         // Continue to check if event exists
       }
 
-      // 7. Check if player id event exists (but we couldn't decrypt)
+      // 6. Check if player id event exists (but we couldn't decrypt)
       const eventExists = await checkPlayerIdEventExists(hex);
       if (eventExists) {
         // Event exists but decrypt failed - wrong secondary secret
@@ -227,7 +212,7 @@ export function useNostrSession({
         return;
       }
 
-      // 8. No player id event exists - needs setup with nsec
+      // 7. No player id event exists - needs setup with nsec
       setSessionStatus("needs_setup");
     } finally {
       initializingRef.current = false;
@@ -297,7 +282,6 @@ export function useNostrSession({
         const remotePlayerId = await loadPlayerIdFromNostr(pubkeyHex, secret);
         if (remotePlayerId && isValidPlayerId(remotePlayerId)) {
           setPlayerId(remotePlayerId);
-          cachePlayerId(fingerprint, remotePlayerId);
           const keys = await deriveEncryptionKey(remotePlayerId);
           setEncryptionKeys(keys);
           setSessionStatus("idle");
@@ -379,8 +363,7 @@ export function useNostrSession({
         return false;
       }
 
-      // Cache locally and derive encryption keys
-      cachePlayerId(fingerprint, newPlayerId);
+      // Set player id and derive encryption keys
       setPlayerId(newPlayerId);
 
       const keys = await deriveEncryptionKey(newPlayerId);
@@ -436,9 +419,7 @@ export function useNostrSession({
         return false;
       }
 
-      // Clear old cached player id and cache new one
-      clearCachedPlayerId(fingerprint);
-      cachePlayerId(fingerprint, newPlayerId);
+      // Set new player id
       setPlayerId(newPlayerId);
 
       // Derive new encryption keys
