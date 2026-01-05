@@ -17,7 +17,6 @@ import {
   getSecondarySecret,
   setSecondarySecret,
   clearSecondarySecret,
-  storeNsec,
 } from "@/lib/identity";
 import {
   loadPlayerIdFromNostr,
@@ -359,9 +358,6 @@ export function useNostrSession({
       // Store the secret
       setSecondarySecret(fp, secret);
       setSecondarySecretState(secret);
-
-      // Optionally store nsec for convenience
-      storeNsec(fp, nsec);
 
       // Generate new player id
       const newPlayerId = generatePlayerId();

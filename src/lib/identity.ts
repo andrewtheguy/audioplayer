@@ -77,38 +77,6 @@ export function clearSecondarySecret(fingerprint: string): void {
 }
 
 // =============================================================================
-// nsec Storage (optional, for user convenience)
-// =============================================================================
-
-function getNsecKey(fingerprint: string): string {
-  return `${STORAGE_PREFIX}.nsec.${fingerprint}`;
-}
-
-/**
- * Get stored nsec from localStorage (returns null if not stored)
- */
-export function getStoredNsec(fingerprint: string): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(getNsecKey(fingerprint));
-}
-
-/**
- * Store nsec in localStorage
- */
-export function storeNsec(fingerprint: string, nsec: string): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(getNsecKey(fingerprint), nsec);
-}
-
-/**
- * Clear nsec from localStorage
- */
-export function clearNsec(fingerprint: string): void {
-  if (typeof window === "undefined") return;
-  localStorage.removeItem(getNsecKey(fingerprint));
-}
-
-// =============================================================================
 // History Storage (per npub fingerprint)
 // =============================================================================
 
@@ -129,6 +97,5 @@ export function getHistoryStorageKey(fingerprint: string): string {
 export function clearAllIdentityData(fingerprint: string): void {
   if (typeof window === "undefined") return;
   clearSecondarySecret(fingerprint);
-  clearNsec(fingerprint);
   localStorage.removeItem(getHistoryStorageKey(fingerprint));
 }
