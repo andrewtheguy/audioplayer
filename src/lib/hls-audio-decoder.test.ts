@@ -100,7 +100,6 @@ describe("HlsAudioDecoder", () => {
 
   it("trims live queue to 60s on initial load", async () => {
     const masterUrl = "https://example.com/master.m3u8";
-    const mediaUrl = "https://example.com/index.m3u8";
     const segments = Array.from({ length: 10 }, (_, i) => ({
       uri: `seg${i}.ts`,
       duration: 10,
@@ -172,9 +171,9 @@ describe("HlsAudioDecoder", () => {
     });
 
     await decoder.load();
-    await (decoder as any).refreshLivePlaylist(false);
+    await (decoder as unknown as { refreshLivePlaylist: (initial: boolean) => Promise<void> }).refreshLivePlaylist(false);
 
-    const queue = (decoder as any).liveQueue as Array<{ url: string }>;
+    const queue = (decoder as unknown as { liveQueue: Array<{ url: string }> }).liveQueue;
     expect(queue.length).toBe(6);
     expect(queue[0].url).toContain("seg10.ts");
   });
@@ -209,7 +208,7 @@ describe("HlsAudioDecoder", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(onEnded).not.toHaveBeenCalled();
-    const sources = (decoder as any).sources as MockSource[];
+    const sources = (decoder as unknown as { sources: MockSource[] }).sources;
     expect(sources.length).toBe(1);
     sources[0].onended?.();
     expect(onEnded).toHaveBeenCalledTimes(1);
@@ -243,11 +242,11 @@ describe("HlsAudioDecoder", () => {
     decoder.play();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const sources = (decoder as any).sources as MockSource[];
+    const sources = (decoder as unknown as { sources: MockSource[] }).sources;
     expect(sources.length).toBe(1);
     const source = sources[0];
     source.onended?.();
-    expect((decoder as any).sources.length).toBe(0);
+    expect((decoder as unknown as { sources: MockSource[] }).sources.length).toBe(0);
     expect(source.disconnectCalled).toBe(true);
   });
 });

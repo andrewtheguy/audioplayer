@@ -298,13 +298,17 @@ export class HlsAudioDecoder {
           source.onended = () => {
             if (token !== this.scheduleToken) return;
             cleanup();
+            source.buffer = null;
             if (!this.isPlaying) return;
             this.isPlaying = false;
             this.callbacks.onState(false);
             this.callbacks.onEnded();
           };
         } else {
-          source.onended = cleanup;
+          source.onended = () => {
+            cleanup();
+            source.buffer = null;
+          };
         }
         source.start(startTime, segmentOffset);
         this.sources.push(source);
