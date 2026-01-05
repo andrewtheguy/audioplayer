@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import Hls from "hls.js";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -11,6 +11,7 @@ import {
   saveHistory,
   type HistoryEntry,
 } from "@/lib/history";
+import { HlsAudioDecoder } from "@/lib/hls-audio-decoder";
 
 const SAVE_INTERVAL_MS = 5000;
 
@@ -72,11 +73,14 @@ function AudioPlayerInner({
   const currentTitleRef = useRef<string | undefined>(undefined);
   const isLiveStreamRef = useRef<boolean>(false);
   const isPlayingRef = useRef<boolean>(false);
+  const isDecodedHlsRef = useRef<boolean>(false);
+  const decodedTimeRef = useRef<number>(0);
   const audioContextRef = useRef<AudioContext | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const analyserNodeRef = useRef<AnalyserNode | null>(null);
   const meterRafRef = useRef<number | null>(null);
+  const decoderRef = useRef<HlsAudioDecoder | null>(null);
   const gainRef = useRef<number>(1);
   const pausedAtTimestampRef = useRef<number | null>(null);
   const pendingSeekTimerRef = useRef<number | null>(null);
@@ -102,6 +106,8 @@ function AudioPlayerInner({
   const [gainEnabled, setGainEnabled] = useState(false);
   const [gain, setGain] = useState(1); // 1 = 100%
   const [meterLevel, setMeterLevel] = useState(0);
+  const [showMeter, setShowMeter] = useState(false);
+  const [isDecodedHls, setIsDecodedHls] = useState(false);
   const [isViewOnly, setIsViewOnly] = useState(false);
   const [actualSessionStatus, setActualSessionStatus] = useState<"idle" | "active" | "stale" | "invalid" | "unknown">("unknown");
   const [editingUrl, setEditingUrl] = useState<string | null>(null);
@@ -111,6 +117,32 @@ function AudioPlayerInner({
   const [isEditingNowPlaying, setIsEditingNowPlaying] = useState(false);
   const [nowPlayingTitleDraft, setNowPlayingTitleDraft] = useState("");
   const wasViewOnlyRef = useRef(false);
+  const pendingLoadRef = useRef<{ entry: HistoryEntry; options?: { forceReset?: boolean } } | null>(null);
+  const pendingUrlLoadRef = useRef<string | null>(null);
+
+  const isIOSSafari = useMemo(() => {
+    if (typeof navigator === "undefined") return false;
+    const ua = navigator.userAgent;
+    const isIOS =
+      /iP(hone|od|ad)/.test(ua) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const isSafari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+    return isIOS && isSafari;
+  }, []);
+
+  const shouldUseDecodedHls = useCallback((nextUrl: string) => {
+    if (!isIOSSafari) return false;
+    try {
+      const parsed = new URL(nextUrl);
+      const pathname = parsed.pathname.toLowerCase();
+      if (pathname.endsWith(".m3u8")) return true;
+      const format = parsed.searchParams.get("format");
+      return format === "m3u8" || format === "hls";
+    } catch {
+      return false;
+    }
+  }, [isIOSSafari]);
+
 
   // Keep refs in sync with state for use in callbacks
   useEffect(() => {
@@ -120,6 +152,14 @@ function AudioPlayerInner({
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  useEffect(() => {
+    isDecodedHlsRef.current = isDecodedHls;
+  }, [isDecodedHls]);
+
+  useEffect(() => {
+    decodedTimeRef.current = currentTime;
+  }, [currentTime]);
 
   useEffect(() => {
     gainRef.current = gain;
@@ -154,10 +194,7 @@ function AudioPlayerInner({
     });
   }, []);
 
-  const ensureAudioGraph = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio) return false;
-
+  const ensureAudioContextNodes = useCallback(() => {
     if (audioContextRef.current?.state === "closed") {
       audioContextRef.current = null;
       sourceNodeRef.current = null;
@@ -165,7 +202,7 @@ function AudioPlayerInner({
       analyserNodeRef.current = null;
     }
 
-    if (audioContextRef.current && sourceNodeRef.current && gainNodeRef.current && analyserNodeRef.current) {
+    if (audioContextRef.current && gainNodeRef.current && analyserNodeRef.current) {
       return true;
     }
 
@@ -181,17 +218,14 @@ function AudioPlayerInner({
 
     try {
       const ctx = new AudioContextClass();
-      const source = ctx.createMediaElementSource(audio);
       const gainNode = ctx.createGain();
       const analyserNode = ctx.createAnalyser();
       analyserNode.fftSize = 2048;
 
-      source.connect(gainNode);
       gainNode.connect(analyserNode);
       analyserNode.connect(ctx.destination);
 
       audioContextRef.current = ctx;
-      sourceNodeRef.current = source;
       gainNodeRef.current = gainNode;
       analyserNodeRef.current = analyserNode;
 
@@ -203,10 +237,32 @@ function AudioPlayerInner({
     }
   }, []);
 
+  const ensureMediaElementSource = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return false;
+
+    if (!ensureAudioContextNodes()) return false;
+
+    if (sourceNodeRef.current) {
+      return true;
+    }
+
+    try {
+      const source = audioContextRef.current!.createMediaElementSource(audio);
+      source.connect(gainNodeRef.current!);
+      sourceNodeRef.current = source;
+      return true;
+    } catch (err) {
+      console.error("Failed to connect media element source:", err);
+      setError("Boost is unavailable for this stream.");
+      return false;
+    }
+  }, [ensureAudioContextNodes]);
+
   const resumeAudioGraph = useCallback(() => {
-    if (!ensureAudioGraph()) return;
+    if (!ensureAudioContextNodes()) return;
     resumeAudioContext();
-  }, [ensureAudioGraph, resumeAudioContext]);
+  }, [ensureAudioContextNodes, resumeAudioContext]);
 
   const startMeter = useCallback(() => {
     const analyser = analyserNodeRef.current;
@@ -234,6 +290,71 @@ function AudioPlayerInner({
     setMeterLevel(0);
   }, []);
 
+  const stopDecodedPlayback = useCallback(() => {
+    if (decoderRef.current) {
+      decoderRef.current.stop();
+      decoderRef.current = null;
+    }
+    stopMeter();
+    setIsDecodedHls(false);
+  }, [stopMeter]);
+
+  const startDecodedPlayback = useCallback(async (urlToLoad: string, startPosition?: number) => {
+    if (!ensureAudioContextNodes() || !gainNodeRef.current || !audioContextRef.current) {
+      setError("Web Audio is unavailable for decoded playback.");
+      return false;
+    }
+
+    stopDecodedPlayback();
+    setIsDecodedHls(true);
+    setIsLiveStream(false);
+    isLiveStreamRef.current = false;
+
+    const decoder = new HlsAudioDecoder(urlToLoad, audioContextRef.current, gainNodeRef.current, {
+      onTime: (time) => {
+        setCurrentTime(time);
+      },
+      onDuration: (nextDuration, live) => {
+        setDuration(nextDuration);
+        setIsLiveStream(live);
+        isLiveStreamRef.current = live;
+      },
+      onState: (playing) => {
+        setIsPlaying(playing);
+        if (playing) {
+          startMeter();
+        } else {
+          stopMeter();
+        }
+      },
+      onEnded: () => {
+        setIsPlaying(false);
+        stopMeter();
+      },
+      onError: (message) => {
+        setError(message);
+        console.error("[decoded-hls]", message);
+      },
+    });
+
+    decoderRef.current = decoder;
+
+    try {
+      await decoder.load();
+      if (typeof startPosition === "number" && isFinite(startPosition)) {
+        decoder.seek(startPosition);
+      }
+      setIsLoaded(true);
+      return true;
+    } catch (err) {
+      const message = (err as Error).message;
+      setError(`Failed to load HLS for decoded playback: ${message}`);
+      console.error("[decoded-hls] load error:", err);
+      stopDecodedPlayback();
+      return false;
+    }
+  }, [ensureAudioContextNodes, startMeter, stopDecodedPlayback, stopMeter]);
+
   // Apply gain value when enabled
   useEffect(() => {
     if (gainNodeRef.current) {
@@ -251,20 +372,24 @@ function AudioPlayerInner({
       return;
     }
 
-    if (!ensureAudioGraph() || !gainNodeRef.current) {
+    const canEnable = isDecodedHls ? ensureAudioContextNodes() : ensureMediaElementSource();
+    if (!canEnable || !gainNodeRef.current) {
       return;
     }
 
     gainNodeRef.current.gain.value = gainRef.current;
     resumeAudioContext();
     setGainEnabled(true);
-  }, [gainEnabled, ensureAudioGraph, resumeAudioContext]);
+  }, [gainEnabled, isDecodedHls, ensureAudioContextNodes, ensureMediaElementSource, resumeAudioContext]);
 
   // Save history entry with an explicit position (skip for live streams)
   const saveHistoryEntry = useCallback((position?: number, options?: { allowLive?: boolean }) => {
     const audio = audioRef.current;
-    if (!audio || !currentUrlRef.current) return;
-    const resolvedPosition = position ?? audio.currentTime;
+    if (!currentUrlRef.current) return;
+    if (!audio && !isDecodedHlsRef.current) return;
+    const resolvedPosition =
+      position ??
+      (isDecodedHlsRef.current ? decodedTimeRef.current : audio?.currentTime ?? 0);
     if (!isFinite(resolvedPosition)) return;
     if (isLiveStreamRef.current && !options?.allowLive) {
       return; // Don't save position for live streams unless explicitly allowed
@@ -346,8 +471,9 @@ function AudioPlayerInner({
         clearTimeout(pendingSeekTimerRef.current);
         pendingSeekTimerRef.current = null;
       }
+      stopDecodedPlayback();
     };
-  }, [saveHistoryEntry, stopMeter]);
+  }, [saveHistoryEntry, stopMeter, stopDecodedPlayback]);
 
   // Load directly from a history entry (with position)
   const loadFromHistory = useCallback((entry: HistoryEntry, options?: { forceReset?: boolean }) => {
@@ -375,11 +501,16 @@ function AudioPlayerInner({
       pendingSeekTimerRef.current = null;
     }
     const urlToLoad = entry.url;
-
+    const useDecoded = shouldUseDecodedHls(urlToLoad);
     const audio = audioRef.current;
-    if (!audio) return;
 
-    if (options?.forceReset) {
+    if (!useDecoded && !audio) {
+      pendingLoadRef.current = { entry, options };
+      setIsDecodedHls(false);
+      return;
+    }
+
+    if (options?.forceReset && audio) {
       audio.pause();
       audio.src = "";
       audio.load();
@@ -388,6 +519,15 @@ function AudioPlayerInner({
     if (hlsRef.current) {
       hlsRef.current.destroy();
       hlsRef.current = null;
+    }
+
+    if (useDecoded) {
+      stopDecodedPlayback();
+      if (audio) {
+        audio.pause();
+        audio.src = "";
+        audio.load();
+      }
     }
 
     currentUrlRef.current = urlToLoad;
@@ -404,6 +544,19 @@ function AudioPlayerInner({
       setUrl("");
       setShowLoadInputs(false);
     };
+
+    if (useDecoded) {
+      void startDecodedPlayback(urlToLoad, entry.position).then((success) => {
+        if (success) {
+          onLoadSuccess();
+        }
+      });
+      return;
+    }
+
+    stopDecodedPlayback();
+    if (!audio) return;
+    audio.crossOrigin = "anonymous";
 
     if (urlToLoad.includes(".m3u8")) {
       if (Hls.isSupported()) {
@@ -446,10 +599,10 @@ function AudioPlayerInner({
       audio.src = urlToLoad;
       onLoadSuccess();
     }
-  }, [saveHistoryEntry]);
+  }, [saveHistoryEntry, shouldUseDecodedHls, startDecodedPlayback, stopDecodedPlayback]);
 
   // Load a URL - redirects to loadFromHistory if URL exists in history
-  const loadUrl = (urlToLoad: string) => {
+  const loadUrl = useCallback((urlToLoad: string) => {
     const resolvedTitle = normalizeTitle(title);
     const historyEntry = history.find((h) => h.url === urlToLoad);
     if (historyEntry) {
@@ -484,8 +637,13 @@ function AudioPlayerInner({
     setGain(1);
     pendingSeekPositionRef.current = null;
 
+    const useDecoded = shouldUseDecodedHls(urlToLoad);
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!useDecoded && !audio) {
+      pendingUrlLoadRef.current = urlToLoad;
+      setIsDecodedHls(false);
+      return;
+    }
 
     if (hlsRef.current) {
       hlsRef.current.destroy();
@@ -507,6 +665,25 @@ function AudioPlayerInner({
       // Add to history immediately upon load success
       saveHistoryEntry(0, { allowLive: true });
     };
+
+    if (useDecoded) {
+      stopDecodedPlayback();
+      if (audio) {
+        audio.pause();
+        audio.src = "";
+        audio.load();
+      }
+      void startDecodedPlayback(urlToLoad, 0).then((success) => {
+        if (success) {
+          onLoadSuccess();
+        }
+      });
+      return;
+    }
+
+    stopDecodedPlayback();
+    if (!audio) return;
+    audio.crossOrigin = "anonymous";
 
     if (urlToLoad.includes(".m3u8")) {
       if (Hls.isSupported()) {
@@ -543,7 +720,23 @@ function AudioPlayerInner({
       audio.src = urlToLoad;
       onLoadSuccess();
     }
-  };
+  }, [history, loadFromHistory, saveHistoryEntry, shouldUseDecodedHls, startDecodedPlayback, stopDecodedPlayback, title]);
+
+  useEffect(() => {
+    if (!pendingLoadRef.current) return;
+    if (!audioRef.current) return;
+    const pending = pendingLoadRef.current;
+    pendingLoadRef.current = null;
+    loadFromHistory(pending.entry, pending.options);
+  }, [isDecodedHls, loadFromHistory]);
+
+  useEffect(() => {
+    if (!pendingUrlLoadRef.current) return;
+    if (!audioRef.current) return;
+    const pending = pendingUrlLoadRef.current;
+    pendingUrlLoadRef.current = null;
+    loadUrl(pending);
+  }, [isDecodedHls, loadUrl]);
 
   // Load from URL input
   const loadStream = () => {
@@ -556,13 +749,25 @@ function AudioPlayerInner({
   };
 
   const togglePlayPause = () => {
+    if (isDecodedHls && decoderRef.current) {
+      resumeAudioGraph();
+      if (isPlaying) {
+        decoderRef.current.pause();
+      } else {
+        decoderRef.current.play();
+      }
+      return;
+    }
+
     const audio = audioRef.current;
     if (!audio) return;
 
     if (isPlaying) {
       audio.pause();
     } else {
-      resumeAudioGraph();
+      if (ensureMediaElementSource()) {
+        resumeAudioGraph();
+      }
       audio.play().catch((e) => {
         setError(`Playback error: ${e.message}`);
       });
@@ -570,6 +775,7 @@ function AudioPlayerInner({
   };
 
   const handleTimeUpdate = () => {
+    if (isDecodedHls) return;
     const audio = audioRef.current;
     if (audio) {
       setCurrentTime(audio.currentTime);
@@ -590,6 +796,7 @@ function AudioPlayerInner({
   };
 
   const applyPendingSeek = () => {
+    if (isDecodedHls) return;
     const audio = audioRef.current;
     const pending = pendingSeekPositionRef.current;
     if (!audio || pending === null) return;
@@ -652,14 +859,19 @@ function AudioPlayerInner({
       return;
     }
 
-    if (currentUrlRef.current && currentUrlRef.current === entry.url && audioRef.current) {
+    if (currentUrlRef.current && currentUrlRef.current === entry.url) {
       if (!isLiveStreamRef.current && isFinite(entry.position)) {
-        const delta = Math.abs(audioRef.current.currentTime - entry.position);
-        if (delta > 0.5) {
-          pendingSeekPositionRef.current = entry.position;
-          pendingSeekAttemptsRef.current = 0;
-          seekingToTargetRef.current = false;
-          applyPendingSeek();
+        if (isDecodedHls && decoderRef.current) {
+          decoderRef.current.seek(entry.position);
+          setCurrentTime(entry.position);
+        } else if (audioRef.current) {
+          const delta = Math.abs(audioRef.current.currentTime - entry.position);
+          if (delta > 0.5) {
+            pendingSeekPositionRef.current = entry.position;
+            pendingSeekAttemptsRef.current = 0;
+            seekingToTargetRef.current = false;
+            applyPendingSeek();
+          }
         }
       }
       currentTitleRef.current = entry.title;
@@ -671,6 +883,7 @@ function AudioPlayerInner({
   };
 
   const handleSeeked = () => {
+    if (isDecodedHls) return;
     const audio = audioRef.current;
     const pending = pendingSeekPositionRef.current;
 
@@ -692,6 +905,7 @@ function AudioPlayerInner({
   };
 
   const handleLoadedMetadata = () => {
+    if (isDecodedHls) return;
     const audio = audioRef.current;
     if (audio) {
       setDuration(audio.duration);
@@ -707,24 +921,43 @@ function AudioPlayerInner({
   };
 
   const handleSeek = (value: number[]) => {
+    if (!isFinite(value[0])) return;
+    if (isDecodedHls && decoderRef.current) {
+      decoderRef.current.seek(value[0]);
+      setCurrentTime(value[0]);
+      return;
+    }
     const audio = audioRef.current;
-    if (audio && isFinite(value[0])) {
+    if (audio) {
       audio.currentTime = value[0];
       setCurrentTime(value[0]);
     }
   };
 
   const seekRelative = useCallback((seconds: number) => {
+    if (isLiveStreamRef.current) return;
+    if (isDecodedHls && decoderRef.current) {
+      const newTime = Math.max(0, Math.min(duration || 0, currentTime + seconds));
+      decoderRef.current.seek(newTime);
+      setCurrentTime(newTime);
+      return;
+    }
     const audio = audioRef.current;
     if (audio) {
       const newTime = Math.max(0, Math.min(audio.duration || 0, audio.currentTime + seconds));
       audio.currentTime = newTime;
       setCurrentTime(newTime);
     }
-  }, []);
+  }, [currentTime, duration, isDecodedHls]);
 
   const jumpToLiveEdge = () => {
     if (!isLiveStream) return;
+    if (isDecodedHls && decoderRef.current) {
+      resumeAudioGraph();
+      decoderRef.current.jumpToLiveEdge();
+      decoderRef.current.play();
+      return;
+    }
 
     const audio = audioRef.current;
     if (!audio) return;
@@ -898,10 +1131,18 @@ function AudioPlayerInner({
     // Set action handlers with custom seek offsets (-15s back, +30s forward)
     session.setActionHandler("play", () => {
       resumeAudioGraph();
-      audioRef.current?.play();
+      if (isDecodedHls && decoderRef.current) {
+        decoderRef.current.play();
+      } else {
+        audioRef.current?.play();
+      }
     });
     session.setActionHandler("pause", () => {
-      audioRef.current?.pause();
+      if (isDecodedHls && decoderRef.current) {
+        decoderRef.current.pause();
+      } else {
+        audioRef.current?.pause();
+      }
     });
     session.setActionHandler("seekbackward", () => {
       seekRelative(-15);
@@ -925,7 +1166,7 @@ function AudioPlayerInner({
       session.setActionHandler("previoustrack", null);
       session.setActionHandler("nexttrack", null);
     };
-  }, [resumeAudioGraph, seekRelative]);
+  }, [isDecodedHls, resumeAudioGraph, seekRelative]);
 
   // Update Media Session metadata when now playing changes
   useEffect(() => {
@@ -951,6 +1192,7 @@ function AudioPlayerInner({
     if (status === "stale") {
       // Cleanup resources before transitioning to view-only mode
       const audio = audioRef.current;
+      stopDecodedPlayback();
       if (audio && !audio.paused) {
         audio.pause();
       }
@@ -985,7 +1227,7 @@ function AudioPlayerInner({
       setIsLoaded(false);
       setIsPlaying(false);
     }
-  }, [stopMeter]);
+  }, [stopDecodedPlayback, stopMeter]);
 
   useEffect(() => {
     if (isViewOnly) {
@@ -1160,14 +1402,16 @@ function AudioPlayerInner({
         </div>
       )}
 
-      {!isViewOnly && (
+      {!isViewOnly && !isDecodedHls && (
         <audio
           ref={audioRef}
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
           onCanPlay={applyPendingSeek}
           onPlay={() => {
-            resumeAudioGraph();
+            if (ensureMediaElementSource()) {
+              resumeAudioGraph();
+            }
             startMeter();
             setIsPlaying(true);
           }}
@@ -1177,8 +1421,15 @@ function AudioPlayerInner({
             setIsPlaying(false);
             stopMeter();
           }}
-          onError={() => setError("Audio playback error")}
+          onError={() => {
+            const audio = audioRef.current;
+            const code = audio?.error?.code;
+            const detail = audio?.error?.message ?? "Unknown error";
+            console.error("[audio-element] error", { code, detail });
+            setError(`Audio playback error: ${detail}`);
+          }}
           playsInline
+          crossOrigin="anonymous"
         />
       )}
 
@@ -1260,20 +1511,6 @@ function AudioPlayerInner({
           </div>
         )}
 
-        {/* Audio Meter */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>Meter</span>
-            <span>{Math.round(meterLevel * 100)}%</span>
-          </div>
-          <div className="h-2 rounded bg-muted overflow-hidden">
-            <div
-              className="h-full bg-emerald-500 transition-[width] duration-75"
-              style={{ width: `${Math.min(100, Math.round(meterLevel * 100))}%` }}
-            />
-          </div>
-        </div>
-
         {/* Gain Control */}
         <div className="flex items-center gap-3">
           <button
@@ -1304,7 +1541,32 @@ function AudioPlayerInner({
               </span>
             </>
           )}
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={showMeter}
+              onChange={(e) => setShowMeter(e.target.checked)}
+              disabled={isViewOnly}
+              className="h-3 w-3 accent-foreground"
+            />
+            Meter
+          </label>
         </div>
+
+        {showMeter && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>Meter</span>
+              <span>{Math.round(meterLevel * 100)}%</span>
+            </div>
+            <div className="h-2 rounded bg-muted overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 transition-[width] duration-75"
+                style={{ width: `${Math.min(100, Math.round(meterLevel * 100))}%` }}
+              />
+            </div>
+          </div>
+        )}
         </div>
       )}
 
