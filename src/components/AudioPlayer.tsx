@@ -73,6 +73,8 @@ function AudioPlayerInner({
   const currentTitleRef = useRef<string | undefined>(undefined);
   const isLiveStreamRef = useRef<boolean>(false);
   const isPlayingRef = useRef<boolean>(false);
+  const isDecodedHlsRef = useRef<boolean>(false);
+  const decodedTimeRef = useRef<number>(0);
   const audioContextRef = useRef<AudioContext | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
@@ -139,6 +141,14 @@ function AudioPlayerInner({
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  useEffect(() => {
+    isDecodedHlsRef.current = isDecodedHls;
+  }, [isDecodedHls]);
+
+  useEffect(() => {
+    decodedTimeRef.current = currentTime;
+  }, [currentTime]);
 
   useEffect(() => {
     gainRef.current = gain;
@@ -369,8 +379,11 @@ function AudioPlayerInner({
   // Save history entry with an explicit position (skip for live streams)
   const saveHistoryEntry = useCallback((position?: number, options?: { allowLive?: boolean }) => {
     const audio = audioRef.current;
-    if (!audio || !currentUrlRef.current) return;
-    const resolvedPosition = position ?? audio.currentTime;
+    if (!currentUrlRef.current) return;
+    if (!audio && !isDecodedHlsRef.current) return;
+    const resolvedPosition =
+      position ??
+      (isDecodedHlsRef.current ? decodedTimeRef.current : audio?.currentTime ?? 0);
     if (!isFinite(resolvedPosition)) return;
     if (isLiveStreamRef.current && !options?.allowLive) {
       return; // Don't save position for live streams unless explicitly allowed
