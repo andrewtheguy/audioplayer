@@ -153,3 +153,16 @@ export function saveHistory(
     console.warn("Failed to save history to localStorage:", err);
   }
 }
+
+/**
+ * Clear history from localStorage
+ */
+export function clearHistory(fingerprint: string | undefined): void {
+  if (!fingerprint) return;
+  try {
+    const key = getHistoryStorageKey(fingerprint);
+    localStorage.removeItem(key);
+  } catch (err) {
+    console.warn("Failed to clear history from localStorage:", err);
+  }
+}

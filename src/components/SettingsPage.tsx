@@ -12,6 +12,7 @@ import {
   generateSecondarySecret,
 } from "@/lib/nostr-crypto";
 import { clearSecondarySecret, getSecondarySecret, getStorageScope } from "@/lib/identity";
+import { clearHistory } from "@/lib/history";
 import {
   loadHistoryFromNostr,
   loadPlayerIdFromNostr,
@@ -136,7 +137,7 @@ export function SettingsPage() {
       }
     }
 
-    // Clear the old secondary secret from this device
+    // Clear the old secondary secret and local history from this device
     // Note: New credentials are already published - rotation is complete regardless of local cleanup
     let cleanupFailed = false;
     try {
@@ -144,8 +145,9 @@ export function SettingsPage() {
       if (fingerprint) {
         try {
           clearSecondarySecret(fingerprint);
+          clearHistory(fingerprint);
         } catch (clearErr) {
-          console.error("Failed to clear old secret:", clearErr);
+          console.error("Failed to clear old data:", clearErr);
           cleanupFailed = true;
         }
       }
