@@ -143,29 +143,63 @@ function AudioPlayerInner({
     }
   }, [isPlaying]);
 
-  // Setup Web Audio API for gain control (needed for iOS volume control)
-  const setupGainNode = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio || sourceNodeRef.current) return; // Already setup
-
-    const ctx = new AudioContext();
-    const source = ctx.createMediaElementSource(audio);
-    const gainNode = ctx.createGain();
-
-    source.connect(gainNode);
-    gainNode.connect(ctx.destination);
-
-    audioContextRef.current = ctx;
-    sourceNodeRef.current = source;
-    gainNodeRef.current = gainNode;
-
-    // Apply current gain immediately after setup
-    gainNode.gain.value = gainRef.current;
-
+  const resumeAudioContext = useCallback(() => {
+    const ctx = audioContextRef.current;
+    if (!ctx || ctx.state !== "suspended") return;
     ctx.resume().catch((err) => {
       console.error("Failed to resume AudioContext:", err);
     });
   }, []);
+
+  const ensureGainNode = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return false;
+
+    if (audioContextRef.current?.state === "closed") {
+      audioContextRef.current = null;
+      sourceNodeRef.current = null;
+      gainNodeRef.current = null;
+    }
+
+    if (audioContextRef.current && sourceNodeRef.current && gainNodeRef.current) {
+      return true;
+    }
+
+    const AudioContextClass =
+      (window.AudioContext ||
+        (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext);
+
+    if (!AudioContextClass) {
+      console.warn("Web Audio API not supported; boost unavailable");
+      setError("Boost is not supported in this browser.");
+      return false;
+    }
+
+    try {
+      const ctx = new AudioContextClass();
+      const source = ctx.createMediaElementSource(audio);
+      const gainNode = ctx.createGain();
+
+      source.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      audioContextRef.current = ctx;
+      sourceNodeRef.current = source;
+      gainNodeRef.current = gainNode;
+
+      return true;
+    } catch (err) {
+      console.error("Failed to initialize Web Audio API:", err);
+      setError("Boost is unavailable for this stream.");
+      return false;
+    }
+  }, []);
+
+  const resumeBoostContext = useCallback(() => {
+    if (!gainEnabled) return;
+    if (!ensureGainNode()) return;
+    resumeAudioContext();
+  }, [gainEnabled, ensureGainNode, resumeAudioContext]);
 
   // Apply gain value when enabled
   useEffect(() => {
@@ -176,11 +210,22 @@ function AudioPlayerInner({
 
   // Handle gain toggle
   const handleGainToggle = useCallback(() => {
-    if (!gainEnabled) {
-      setupGainNode();
+    if (gainEnabled) {
+      setGainEnabled(false);
+      if (gainNodeRef.current) {
+        gainNodeRef.current.gain.value = 1;
+      }
+      return;
     }
-    setGainEnabled(!gainEnabled);
-  }, [gainEnabled, setupGainNode]);
+
+    if (!ensureGainNode() || !gainNodeRef.current) {
+      return;
+    }
+
+    gainNodeRef.current.gain.value = gainRef.current;
+    resumeAudioContext();
+    setGainEnabled(true);
+  }, [gainEnabled, ensureGainNode, resumeAudioContext]);
 
   // Save history entry with an explicit position (skip for live streams)
   const saveHistoryEntry = useCallback((position?: number, options?: { allowLive?: boolean }) => {
@@ -244,6 +289,14 @@ function AudioPlayerInner({
       saveHistoryEntry();
       if (hlsRef.current) {
         hlsRef.current.destroy();
+      }
+      if (sourceNodeRef.current) {
+        sourceNodeRef.current.disconnect();
+        sourceNodeRef.current = null;
+      }
+      if (gainNodeRef.current) {
+        gainNodeRef.current.disconnect();
+        gainNodeRef.current = null;
       }
       if (audioContextRef.current) {
         void audioContextRef.current.close().catch((err) => {
@@ -471,12 +524,7 @@ function AudioPlayerInner({
     if (isPlaying) {
       audio.pause();
     } else {
-      const ctx = audioContextRef.current;
-      if (ctx && ctx.state === "suspended") {
-        ctx.resume().catch((err) => {
-          console.error("Failed to resume AudioContext:", err);
-        });
-      }
+      resumeBoostContext();
       audio.play().catch((e) => {
         setError(`Playback error: ${e.message}`);
       });
@@ -627,14 +675,14 @@ function AudioPlayerInner({
     }
   };
 
-  const seekRelative = (seconds: number) => {
+  const seekRelative = useCallback((seconds: number) => {
     const audio = audioRef.current;
     if (audio) {
       const newTime = Math.max(0, Math.min(audio.duration || 0, audio.currentTime + seconds));
       audio.currentTime = newTime;
       setCurrentTime(newTime);
     }
-  };
+  }, []);
 
   const jumpToLiveEdge = () => {
     if (!isLiveStream) return;
@@ -654,6 +702,7 @@ function AudioPlayerInner({
       }
     }
 
+    resumeBoostContext();
     audio.play().catch((e) => setError(`Playback error: ${e.message}`));
   };
 
@@ -809,6 +858,7 @@ function AudioPlayerInner({
 
     // Set action handlers with custom seek offsets (-15s back, +30s forward)
     session.setActionHandler("play", () => {
+      resumeBoostContext();
       audioRef.current?.play();
     });
     session.setActionHandler("pause", () => {
@@ -836,7 +886,7 @@ function AudioPlayerInner({
       session.setActionHandler("previoustrack", null);
       session.setActionHandler("nexttrack", null);
     };
-  }, []);
+  }, [resumeBoostContext, seekRelative]);
 
   // Update Media Session metadata when now playing changes
   useEffect(() => {
@@ -1073,12 +1123,14 @@ function AudioPlayerInner({
           onLoadedMetadata={handleLoadedMetadata}
           onCanPlay={applyPendingSeek}
           onPlay={() => {
+            resumeBoostContext();
             setIsPlaying(true);
           }}
           onSeeked={handleSeeked}
           onPause={handlePause}
           onEnded={() => setIsPlaying(false)}
           onError={() => setError("Audio playback error")}
+          playsInline
         />
       )}
 
