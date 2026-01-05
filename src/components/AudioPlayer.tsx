@@ -959,57 +959,59 @@ function AudioPlayerInner({
 
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6">
-      {/* URL Input */}
-      {nowPlayingUrl && !shouldShowLoadInputs ? (
-        <Button
-          variant="outline"
-          onClick={() => setShowLoadInputs(true)}
-          disabled={isViewOnly}
-          className="w-full"
-        >
-          Add URL
-        </Button>
-      ) : (
-        <div className="space-y-3">
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Title (optional)</label>
-            <Input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Add a short title"
-              disabled={isViewOnly}
-            />
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Audio URL</label>
-            <div className="flex gap-2">
+      {/* URL Input - only show when session is active */}
+      {actualSessionStatus === "active" && (
+        nowPlayingUrl && !shouldShowLoadInputs ? (
+          <Button
+            variant="outline"
+            onClick={() => setShowLoadInputs(true)}
+            disabled={isViewOnly}
+            className="w-full"
+          >
+            Add URL
+          </Button>
+        ) : (
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Title (optional)</label>
               <Input
                 type="text"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="Enter audio URL"
-                onKeyDown={(e) => e.key === "Enter" && !isViewOnly && loadStream()}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Add a short title"
                 disabled={isViewOnly}
               />
-              <Button onClick={() => loadStream()} disabled={isViewOnly}>Load</Button>
-              {nowPlayingUrl && (
-                <Button
-                  variant="ghost"
-                  onClick={() => setShowLoadInputs(false)}
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Audio URL</label>
+              <div className="flex gap-2">
+                <Input
+                  type="text"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="Enter audio URL"
+                  onKeyDown={(e) => e.key === "Enter" && !isViewOnly && loadStream()}
                   disabled={isViewOnly}
-                >
-                  Cancel
-                </Button>
-              )}
+                />
+                <Button onClick={() => loadStream()} disabled={isViewOnly}>Load</Button>
+                {nowPlayingUrl && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => setShowLoadInputs(false)}
+                    disabled={isViewOnly}
+                  >
+                    Cancel
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )
       )}
 
       {actualSessionStatus === "no_npub" ? (
         <div className="text-sm text-muted-foreground bg-muted/50 border border-border p-3 rounded-md">
-          No identity. Generate a new identity to start.
+          Generate a new identity or enter an existing npub to start.
         </div>
       ) : actualSessionStatus === "needs_secret" ? (
         <div className="text-sm text-amber-700 bg-amber-500/10 border border-amber-500/20 p-3 rounded-md">

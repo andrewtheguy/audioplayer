@@ -3,8 +3,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RELAYS } from "@/lib/nostr-sync";
 import { getStorageScope } from "@/lib/identity";
-import { generateSecondarySecret } from "@/lib/nostr-crypto";
+import { generateSecondarySecret, parseNpub } from "@/lib/nostr-crypto";
 import { cn } from "@/lib/utils";
+import { navigate, navigateReplace } from "@/lib/navigation";
 import {
   useNostrSession,
   type SessionStatus,
@@ -40,8 +41,8 @@ export function NostrSyncPanel({
   // Input states
   const [secondarySecretInput, setSecondarySecretInput] = useState("");
   const [nsecInput, setNsecInput] = useState("");
+  const [npubInput, setNpubInput] = useState("");
   const [generatedIdentity, setGeneratedIdentity] = useState<{ npub: string; nsec: string; secondarySecret: string } | null>(null);
-  const [showRotateConfirm, setShowRotateConfirm] = useState(false);
   // Generation flow: show_credentials -> done
   const [generationStep, setGenerationStep] = useState<"show_credentials" | null>(null);
 
@@ -61,7 +62,6 @@ export function NostrSyncPanel({
     generateNewIdentity,
     submitSecondarySecret,
     setupWithNsec,
-    rotatePlayerId,
   } = useNostrSession({ sessionId, onSessionStatusChange });
 
   const { status, message, lastOperation, setMessage, performSave, performLoad, startSession } =
@@ -175,9 +175,27 @@ export function NostrSyncPanel({
     if (typeof window !== "undefined") {
       const needsCleanup = window.location.pathname !== "/" || window.location.hash;
       if (needsCleanup) {
-        window.history.replaceState(null, "", "/");
+        navigateReplace("/");
       }
     }
+  };
+
+  const handleNavigateToNpub = () => {
+    const trimmed = npubInput.trim();
+    if (!trimmed.startsWith("npub1")) {
+      setSessionNotice("Invalid npub format. Must start with 'npub1'.");
+      return;
+    }
+    if (!parseNpub(trimmed)) {
+      setSessionNotice("Invalid npub format.");
+      return;
+    }
+    setNpubInput("");
+    navigate(`/${trimmed}`);
+  };
+
+  const handleBackToHome = () => {
+    navigate("/");
   };
 
   const handleSubmitSecondarySecret = async () => {
@@ -193,14 +211,6 @@ export function NostrSyncPanel({
       setNsecInput("");
       setSecondarySecretInput("");
       setGeneratedIdentity(null);
-    }
-  };
-
-  const handleRotatePlayerId = async () => {
-    const result = await rotatePlayerId(nsecInput.trim());
-    if (result) {
-      setNsecInput("");
-      setShowRotateConfirm(false);
     }
   };
 
@@ -307,7 +317,7 @@ export function NostrSyncPanel({
         return (
           <div className="space-y-3">
             <div className="text-xs text-muted-foreground">
-              Generate a new identity to sync your playback history across devices.
+              Generate a new identity or enter an existing npub to sync your playback history across devices.
             </div>
             <Button
               size="sm"
@@ -317,6 +327,33 @@ export function NostrSyncPanel({
             >
               Generate New Identity
             </Button>
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-background px-2 text-muted-foreground">Or</span>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Input
+                type="text"
+                value={npubInput}
+                onChange={(e) => setNpubInput(e.target.value)}
+                placeholder="npub1..."
+                className="h-8 text-xs font-mono"
+                onKeyDown={(e) => e.key === "Enter" && npubInput.trim() && handleNavigateToNpub()}
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleNavigateToNpub}
+                disabled={!npubInput.trim()}
+                className="w-full h-8 text-xs"
+              >
+                Use Existing Identity
+              </Button>
+            </div>
           </div>
         );
 
@@ -334,15 +371,25 @@ export function NostrSyncPanel({
               className="h-8 text-xs font-mono"
               onKeyDown={(e) => e.key === "Enter" && handleSubmitSecondarySecret()}
             />
-            <Button
-              size="sm"
-              variant="default"
-              onClick={handleSubmitSecondarySecret}
-              disabled={isLoading || !secondarySecretInput.trim()}
-              className="w-full h-8 text-xs"
-            >
-              Unlock
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="default"
+                onClick={handleSubmitSecondarySecret}
+                disabled={isLoading || !secondarySecretInput.trim()}
+                className="flex-1 h-8 text-xs"
+              >
+                Unlock
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleBackToHome}
+                className="h-8 text-xs"
+              >
+                Back
+              </Button>
+            </div>
           </div>
         );
 
@@ -565,55 +612,6 @@ export function NostrSyncPanel({
                     >
                       {status === "saving" ? "Saving..." : "Force Sync"}
                     </Button>
-
-                    {/* Rotate Player ID */}
-                    <div className="mt-3 pt-3 border-t border-border/50">
-                      {!showRotateConfirm ? (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setShowRotateConfirm(true)}
-                          className="w-full h-7 text-[10px] text-muted-foreground hover:text-amber-600"
-                        >
-                          Rotate Player ID
-                        </Button>
-                      ) : (
-                        <div className="space-y-2">
-                          <div className="text-[10px] text-amber-600">
-                            Warning: This will make your current history inaccessible.
-                          </div>
-                          <Input
-                            type="password"
-                            value={nsecInput}
-                            onChange={(e) => setNsecInput(e.target.value)}
-                            placeholder="Enter nsec to confirm"
-                            className="h-7 text-[10px] font-mono"
-                          />
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={handleRotatePlayerId}
-                              disabled={isLoading || !nsecInput.trim()}
-                              className="flex-1 h-7 text-[10px]"
-                            >
-                              Confirm Rotate
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => {
-                                setShowRotateConfirm(false);
-                                setNsecInput("");
-                              }}
-                              className="h-7 text-[10px]"
-                            >
-                              Cancel
-                            </Button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
                   </>
                 )}
               </div>

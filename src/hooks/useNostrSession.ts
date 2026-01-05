@@ -3,6 +3,7 @@ import { getPublicKey } from "nostr-tools/pure";
 import {
   parseNpub,
   decodeNsec,
+  encodeNpub,
   generatePlayerId,
   isValidPlayerId,
   generateSecondarySecret,
@@ -16,13 +17,13 @@ import {
   getSecondarySecret,
   setSecondarySecret,
   clearSecondarySecret,
-  storeNsec,
 } from "@/lib/identity";
 import {
   loadPlayerIdFromNostr,
   publishPlayerIdToNostr,
   PlayerIdDecryptionError,
 } from "@/lib/nostr-sync";
+import { navigate } from "@/lib/navigation";
 
 export type SessionStatus =
   | "no_npub" // No npub in URL
@@ -94,12 +95,12 @@ export function useNostrSession({
   const [pubkeyHex, setPubkeyHex] = useState<string | null>(null);
   const [fingerprint, setFingerprint] = useState<string | null>(null);
 
-  // Player ID and keys
-  const [playerId, setPlayerId] = useState<string | null>(null);
-  const [encryptionKeys, setEncryptionKeys] = useState<{
-    privateKey: Uint8Array;
-    publicKey: string;
-  } | null>(null);
+  // Player ID and encryption keys (combined for atomic updates)
+  const [playerState, setPlayerState] = useState<{
+    playerId: string | null;
+    encryptionKeys: { privateKey: Uint8Array; publicKey: string } | null;
+  }>({ playerId: null, encryptionKeys: null });
+  const { playerId, encryptionKeys } = playerState;
 
   // Secondary secret
   const [secondarySecret, setSecondarySecretState] = useState<string | null>(null);
@@ -148,6 +149,9 @@ export function useNostrSession({
     if (initializingRef.current) return;
     initializingRef.current = true;
 
+    // Reset player state at start of initialization (atomic)
+    setPlayerState({ playerId: null, encryptionKeys: null });
+
     try {
       // 1. Parse npub from URL path
       const currentNpub = getNpubFromPath();
@@ -155,8 +159,6 @@ export function useNostrSession({
         setNpub(null);
         setPubkeyHex(null);
         setFingerprint(null);
-        setPlayerId(null);
-        setEncryptionKeys(null);
         setSecondarySecretState(null);
         setSessionStatus("no_npub");
         return;
@@ -193,9 +195,8 @@ export function useNostrSession({
       try {
         const remotePlayerId = await loadPlayerIdFromNostr(hex, cachedSecret);
         if (remotePlayerId && isValidPlayerId(remotePlayerId)) {
-          setPlayerId(remotePlayerId);
           const keys = await deriveEncryptionKey(remotePlayerId);
-          setEncryptionKeys(keys);
+          setPlayerState({ playerId: remotePlayerId, encryptionKeys: keys });
           setSessionStatus("idle");
           return;
         }
@@ -232,35 +233,77 @@ export function useNostrSession({
     initializeSession();
   }, [initializeSession]);
 
-  // Listen for path changes (browser back/forward)
+  // Listen for path changes (browser back/forward and programmatic navigation)
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const handlePopState = () => {
-      // Reset state and re-initialize
-      setPlayerId(null);
-      setEncryptionKeys(null);
+    const handleRouteChange = () => {
       initializeSession();
     };
 
-    window.addEventListener("popstate", handlePopState);
+    window.addEventListener("popstate", handleRouteChange);
+    window.addEventListener("routechange", handleRouteChange);
     return () => {
-      window.removeEventListener("popstate", handlePopState);
+      window.removeEventListener("popstate", handleRouteChange);
+      window.removeEventListener("routechange", handleRouteChange);
     };
   }, [initializeSession]);
 
+  // Periodic revalidation of player ID (detect rotation by another device)
+  useEffect(() => {
+    // Only validate when session is active or idle
+    if (sessionStatus !== "idle" && sessionStatus !== "active") return;
+    if (!pubkeyHex || !secondarySecret || !fingerprint || !playerId) return;
+
+    const REVALIDATION_INTERVAL_MS = 30000; // 30 seconds
+
+    const revalidate = async () => {
+      try {
+        const remotePlayerId = await loadPlayerIdFromNostr(pubkeyHex, secondarySecret);
+
+        if (!remotePlayerId) {
+          // Player ID was deleted - shouldn't normally happen
+          console.warn("Player ID no longer exists on relay");
+          return;
+        }
+
+        if (remotePlayerId !== playerId) {
+          // Player ID changed - this means rotation happened with same secret
+          // (unusual, but handle it)
+          console.warn("Player ID changed on relay, re-initializing");
+          const keys = await deriveEncryptionKey(remotePlayerId);
+          setPlayerState({ playerId: remotePlayerId, encryptionKeys: keys });
+        }
+      } catch (err) {
+        if (err instanceof PlayerIdDecryptionError) {
+          // Decryption failed - credentials were rotated
+          console.warn("Player ID decryption failed - credentials rotated");
+          setPlayerState({ playerId: null, encryptionKeys: null });
+          setSecondarySecretState(null);
+          clearSecondarySecret(fingerprint);
+          setSessionStatus("needs_secret");
+          setSessionNotice("Credentials were rotated. Please re-enter your secondary secret.");
+        } else {
+          // Network error - ignore, will retry on next interval
+          console.warn("Failed to revalidate player ID:", err);
+        }
+      }
+    };
+
+    const intervalId = window.setInterval(revalidate, REVALIDATION_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [sessionStatus, pubkeyHex, secondarySecret, fingerprint, playerId]);
+
   // Generate new identity (npub/nsec pair)
+  // Note: Does NOT set the URL - that happens in setupWithNsec after user confirms
   const generateNewIdentity = useCallback(async (): Promise<{
     npub: string;
     nsec: string;
   }> => {
     const keypair = generateNostrKeypair();
-
-    // Set the npub in URL path
-    if (typeof window !== "undefined") {
-      window.history.pushState(null, "", `/${keypair.npub}`);
-    }
-
     return {
       npub: keypair.npub,
       nsec: keypair.nsec,
@@ -288,11 +331,10 @@ export function useNostrSession({
       try {
         const remotePlayerId = await loadPlayerIdFromNostr(pubkeyHex, secret);
         if (remotePlayerId && isValidPlayerId(remotePlayerId)) {
-          // Success - now persist to localStorage
-          setSecondarySecret(fingerprint, secret);
-          setPlayerId(remotePlayerId);
+          // Derive keys first, then set state atomically
           const keys = await deriveEncryptionKey(remotePlayerId);
-          setEncryptionKeys(keys);
+          setSecondarySecret(fingerprint, secret);
+          setPlayerState({ playerId: remotePlayerId, encryptionKeys: keys });
           setSessionStatus("idle");
           setSessionNotice(null);
           return true;
@@ -332,17 +374,22 @@ export function useNostrSession({
         return false;
       }
 
-      // Verify nsec matches npub
+      // Derive pubkey and npub from nsec
       const derivedPubkey = getPublicKey(privateKeyBytes);
-      if (derivedPubkey !== pubkeyHex) {
-        setSessionNotice("nsec does not match this identity.");
-        return false;
+      const derivedNpub = encodeNpub(derivedPubkey);
+
+      // Check if there's already an npub in URL - if so, verify it matches
+      const currentNpub = getNpubFromPath();
+      if (currentNpub) {
+        const currentPubkey = parseNpub(currentNpub);
+        if (currentPubkey && currentPubkey !== derivedPubkey) {
+          setSessionNotice("nsec does not match this identity.");
+          return false;
+        }
       }
 
-      if (!fingerprint) {
-        setSessionNotice("No identity loaded.");
-        return false;
-      }
+      // Compute fingerprint
+      const fp = fingerprint ?? (await getStorageScope(derivedPubkey));
 
       // Use provided secret or existing or generate new
       let secret = newSecondarySecret;
@@ -356,11 +403,8 @@ export function useNostrSession({
       }
 
       // Store the secret
-      setSecondarySecret(fingerprint, secret);
+      setSecondarySecret(fp, secret);
       setSecondarySecretState(secret);
-
-      // Optionally store nsec for convenience
-      storeNsec(fingerprint, nsec);
 
       // Generate new player id
       const newPlayerId = generatePlayerId();
@@ -372,7 +416,7 @@ export function useNostrSession({
           newPlayerId,
           secret,
           privateKeyBytes,
-          pubkeyHex!
+          derivedPubkey
         );
       } catch (err) {
         setSessionNotice(
@@ -382,18 +426,26 @@ export function useNostrSession({
         return false;
       }
 
-      // Set player id and derive encryption keys
-      setPlayerId(newPlayerId);
+      // Set URL to npub (after successful publish)
+      if (typeof window !== "undefined" && window.location.pathname !== `/${derivedNpub}`) {
+        navigate(`/${derivedNpub}`);
+      }
 
+      // Update React state
+      setNpub(derivedNpub);
+      setPubkeyHex(derivedPubkey);
+      setFingerprint(fp);
+
+      // Derive encryption keys first, then set state atomically
       const keys = await deriveEncryptionKey(newPlayerId);
-      setEncryptionKeys(keys);
+      setPlayerState({ playerId: newPlayerId, encryptionKeys: keys });
 
       setSessionStatus("idle");
       setSessionNotice(null);
 
       return true;
     },
-    [pubkeyHex, fingerprint, secondarySecret]
+    [fingerprint, secondarySecret]
   );
 
   // Rotate player id
@@ -438,12 +490,9 @@ export function useNostrSession({
         return false;
       }
 
-      // Set new player id
-      setPlayerId(newPlayerId);
-
-      // Derive new encryption keys
+      // Derive encryption keys first, then set state atomically
       const keys = await deriveEncryptionKey(newPlayerId);
-      setEncryptionKeys(keys);
+      setPlayerState({ playerId: newPlayerId, encryptionKeys: keys });
 
       setSessionStatus("idle");
       setSessionNotice("Player ID rotated. Previous history is no longer accessible.");
