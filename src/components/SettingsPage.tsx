@@ -16,6 +16,28 @@ export function SettingsPage() {
   const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
   const [newSecondarySecret, setNewSecondarySecret] = useState<string | null>(null);
+  const [derivedNpub, setDerivedNpub] = useState<string | null>(null);
+
+  // Derive npub from nsec as user types
+  const handleNsecChange = (value: string) => {
+    setNsecInput(value);
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setDerivedNpub(null);
+      return;
+    }
+    try {
+      const privateKeyBytes = decodeNsec(trimmed);
+      if (privateKeyBytes) {
+        const pubkeyHex = getPublicKey(privateKeyBytes);
+        setDerivedNpub(encodeNpub(pubkeyHex));
+      } else {
+        setDerivedNpub(null);
+      }
+    } catch {
+      setDerivedNpub(null);
+    }
+  };
 
   const handleBackToHome = () => {
     window.history.pushState(null, "", "/");
@@ -114,12 +136,21 @@ export function SettingsPage() {
                 <Input
                   type="password"
                   value={nsecInput}
-                  onChange={(e) => setNsecInput(e.target.value)}
+                  onChange={(e) => handleNsecChange(e.target.value)}
                   placeholder="nsec1..."
                   className="h-8 text-xs font-mono"
                   disabled={status === "loading"}
                 />
               </div>
+
+              {derivedNpub && (
+                <div className="p-2 bg-muted/50 rounded border border-border">
+                  <div className="text-[10px] text-muted-foreground mb-1">This will rotate:</div>
+                  <code className="font-mono text-xs block select-all break-all">
+                    {derivedNpub}
+                  </code>
+                </div>
+              )}
 
               {message && status === "error" && (
                 <div className="text-xs p-2 rounded bg-red-500/10 text-red-700 border border-red-500/20">
@@ -131,7 +162,7 @@ export function SettingsPage() {
                 variant="destructive"
                 size="sm"
                 onClick={handleRotatePlayerId}
-                disabled={status === "loading" || !nsecInput.trim()}
+                disabled={status === "loading" || !derivedNpub}
                 className="w-full h-8 text-xs"
               >
                 {status === "loading" ? "Rotating..." : "Rotate Player ID & Secret"}
