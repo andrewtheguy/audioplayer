@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -17,9 +18,10 @@ import {
   publishPlayerIdToNostr,
   saveHistoryToNostr,
 } from "@/lib/nostr-sync";
-import { navigate } from "@/lib/navigation";
 
 export function SettingsPage() {
+  const navigate = useNavigate();
+
   const [nsecInput, setNsecInput] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);

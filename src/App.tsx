@@ -1,40 +1,31 @@
-import { useState, useEffect } from "react";
+import { Routes, Route } from "react-router";
 import { AudioPlayer } from "@/components/AudioPlayer";
 import { SettingsPage } from "@/components/SettingsPage";
 
-function getRoute(): "player" | "settings" {
-  if (typeof window === "undefined") return "player";
-  return window.location.pathname === "/settings" ? "settings" : "player";
-}
-
-function App() {
-  const [route, setRoute] = useState<"player" | "settings">(getRoute);
-
-  useEffect(() => {
-    const handleRouteChange = () => {
-      setRoute(getRoute());
-    };
-    window.addEventListener("popstate", handleRouteChange);
-    window.addEventListener("routechange", handleRouteChange);
-    return () => {
-      window.removeEventListener("popstate", handleRouteChange);
-      window.removeEventListener("routechange", handleRouteChange);
-    };
-  }, []);
-
-  if (route === "settings") {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4">
-        <SettingsPage />
-      </div>
-    );
-  }
-
+function PlayerPage() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4">
       <h1 className="text-2xl font-bold mb-8">Audio Player</h1>
       <AudioPlayer />
     </div>
+  );
+}
+
+function SettingsRoute() {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center p-4">
+      <SettingsPage />
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<PlayerPage />} />
+      <Route path="/settings" element={<SettingsRoute />} />
+      <Route path="/:npub" element={<PlayerPage />} />
+    </Routes>
   );
 }
 

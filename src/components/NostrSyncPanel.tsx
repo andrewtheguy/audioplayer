@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RELAYS } from "@/lib/nostr-sync";
 import { getStorageScope } from "@/lib/identity";
 import { generateSecondarySecret, parseNpub } from "@/lib/nostr-crypto";
 import { cn } from "@/lib/utils";
-import { navigate, navigateReplace } from "@/lib/navigation";
 import {
   useNostrSession,
   type SessionStatus,
@@ -34,6 +34,9 @@ export function NostrSyncPanel({
   sessionId,
   isPlayingRef,
 }: NostrSyncPanelProps) {
+  const navigate = useNavigate();
+  const { npub: npubParam } = useParams<{ npub: string }>();
+
   const [showDetails, setShowDetails] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [displayFingerprint, setDisplayFingerprint] = useState<string | undefined>(undefined);
@@ -62,7 +65,12 @@ export function NostrSyncPanel({
     generateNewIdentity,
     submitSecondarySecret,
     setupWithNsec,
-  } = useNostrSession({ sessionId, onSessionStatusChange });
+  } = useNostrSession({
+    npub: npubParam ?? null,
+    onNavigate: navigate,
+    sessionId,
+    onSessionStatusChange,
+  });
 
   const { status, message, lastOperation, setMessage, performSave, performLoad, startSession } =
     useNostrSync({
@@ -175,7 +183,7 @@ export function NostrSyncPanel({
     if (typeof window !== "undefined") {
       const needsCleanup = window.location.pathname !== "/" || window.location.hash;
       if (needsCleanup) {
-        navigateReplace("/");
+        navigate("/", { replace: true });
       }
     }
   };
