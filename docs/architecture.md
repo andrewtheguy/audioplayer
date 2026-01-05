@@ -70,7 +70,7 @@ Orchestrates cross-device synchronization by connecting session management with 
 - **Session Management**: Coordinates with `useNostrSession` for active/stale status
 - **Sync Delegation**: Uses `useNostrSync` for all sync operations
 - **Takeover UI**: Provides controls for claiming sessions from other devices
-- **Storage Fingerprint**: Computes and propagates fingerprint from secret to parent for scoped localStorage access; displays fingerprint in `XXXX-XXXX-XXXX-XXXX` format in Details panel
+- **Storage Fingerprint**: Computes and propagates fingerprint from npub to parent for scoped localStorage access; displays fingerprint in `XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX` format in Details panel
 
 ### useNostrSession (`hooks/useNostrSession.ts`)
 
@@ -251,11 +251,11 @@ All localStorage keys are scoped by npub fingerprint for isolation:
 | `com.audioplayer.history.v1.{fingerprint}` | History entries array |
 | `com.audioplayer.history.timestamp.{fingerprint}` | Last update timestamp |
 
-The fingerprint is a 16-character hex string (first 64 bits of SHA-256 hash of the pubkeyHex).
+The fingerprint is a 32-character hex string (first 128 bits of SHA-256 hash of the pubkeyHex).
 
 **Key functions:**
 
-- `getNpubFingerprint(pubkeyHex)`: Generates 16-char hex fingerprint from pubkey (async, uses SubtleCrypto)
+- `getNpubFingerprint(pubkeyHex)`: Generates 32-char hex fingerprint from pubkey (async, uses SubtleCrypto)
 - `getSecondarySecret(fingerprint)`: Retrieves secondary secret from localStorage
 - `setSecondarySecret(fingerprint, secret)`: Stores secondary secret
 - `getStoredNsec(fingerprint)`: Retrieves optional stored nsec

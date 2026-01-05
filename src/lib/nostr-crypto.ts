@@ -114,7 +114,7 @@ export function isValidPlayerId(playerId: string): boolean {
   return (
     typeof playerId === "string" &&
     playerId.length === PLAYER_ID_LENGTH &&
-    /^[0-9a-fA-F]+$/.test(playerId)
+    /^[0-9a-f]+$/.test(playerId)
   );
 }
 

@@ -14,15 +14,34 @@ export interface IdentityState {
 }
 
 /**
- * Get fingerprint for localStorage scoping (first 16 hex chars of SHA-256 of pubkey)
+ * Get fingerprint for localStorage scoping (first 32 hex chars / 128 bits of SHA-256 of pubkey)
  */
 export async function getNpubFingerprint(pubkeyHex: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(pubkeyHex);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  // Validate input
+  if (!pubkeyHex || typeof pubkeyHex !== "string") {
+    throw new Error("Invalid pubkeyHex: must be a non-empty string");
+  }
+  if (!/^[0-9a-fA-F]+$/.test(pubkeyHex)) {
+    throw new Error("Invalid pubkeyHex: must contain only hexadecimal characters");
+  }
+  if (pubkeyHex.length !== 64) {
+    throw new Error("Invalid pubkeyHex: expected 64 hex characters (32 bytes)");
+  }
+
+  let hashBuffer: ArrayBuffer;
+  try {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(pubkeyHex);
+    hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  } catch (err) {
+    throw new Error(
+      `Failed to compute fingerprint: ${err instanceof Error ? err.message : "Unknown crypto error"}`
+    );
+  }
+
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-  return hashHex.slice(0, 16);
+  return hashHex.slice(0, 32);
 }
 
 // =============================================================================

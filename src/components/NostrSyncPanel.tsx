@@ -122,8 +122,8 @@ export function NostrSyncPanel({
       .then((fingerprint) => {
         if (!cancelled) {
           onFingerprintChange?.(fingerprint);
-          // Format with dashes for display: XXXX-XXXX-XXXX-XXXX
-          const formatted = fingerprint.toUpperCase().match(/.{1,4}/g)?.join("-");
+          // Format with dashes for display: XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX
+          const formatted = fingerprint.toUpperCase().match(/.{1,8}/g)?.join("-");
           setDisplayFingerprint(formatted);
         }
       })

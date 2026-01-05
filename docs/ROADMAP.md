@@ -76,15 +76,13 @@ This document tracks planned improvements and known limitations for the audio pl
   - Benefits: Prevents accidental logging, analytics capture, or XSS from extracting the secret
   - Limitations: Still vulnerable to same-origin JS using the key (just can't read it); user must still enter secret on first use per device
 - **Implementation sketch:**
-  ```typescript
   // Import as non-extractable key
   const key = await crypto.subtle.importKey(
-    "raw", secretBytes, "PBKDF2", false, ["deriveKey"]
+    "raw", secretBytes, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]
   );
   // Store in IndexedDB
   await db.put("keys", key, "secondary-secret");
   // Retrieve and use - can encrypt/decrypt but never read key material
-  ```
 
 ## Playlist Management
 
