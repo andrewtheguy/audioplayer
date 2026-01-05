@@ -518,7 +518,13 @@ export class HlsAudioDecoder {
         attempt += 1;
         if (attempt >= MAX_SEGMENT_RETRIES) break;
         const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        const deadline = Date.now() + delay;
+        while (Date.now() < deadline) {
+          if (token !== this.scheduleToken) {
+            throw new Error("Segment decode cancelled");
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
       }
     }
     throw lastError ?? new Error("Segment decode failed");
