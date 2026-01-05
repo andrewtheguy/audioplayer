@@ -228,14 +228,12 @@ export async function publishPlayerIdToNostr(
 
 /**
  * Save encrypted history to Nostr relays.
- * History is encrypted using the public key derived from the player id.
- * The event is signed using the user's nsec (identity key).
+ * History is encrypted and signed using keys derived from the player id.
+ * This means history events are authored by the player id identity, not the npub.
  */
 export async function saveHistoryToNostr(
   history: HistoryEntry[],
-  encryptionPublicKey: string, // Public key derived from player id
-  userPrivateKey: Uint8Array, // nsec for signing
-  _userPublicKey: string, // npub hex for verification (reserved for future use)
+  encryptionKeys: { publicKey: string; privateKey: Uint8Array }, // Keys derived from player id
   sessionId?: string,
   signal?: AbortSignal
 ): Promise<void> {
@@ -244,7 +242,7 @@ export async function saveHistoryToNostr(
   // Encrypt history with the encryption key derived from player id
   const { ciphertext, ephemeralPubKey } = encryptHistory(
     history,
-    encryptionPublicKey,
+    encryptionKeys.publicKey,
     sessionId
   );
 
@@ -266,7 +264,7 @@ export async function saveHistoryToNostr(
       tags,
       content: payload,
     },
-    userPrivateKey
+    encryptionKeys.privateKey
   );
 
   try {
@@ -296,17 +294,16 @@ export async function saveHistoryToNostr(
 
 /**
  * Load and decrypt history from Nostr relays
- * History is decrypted using the private key derived from the player id.
+ * History events are authored by the player id derived public key.
  */
 export async function loadHistoryFromNostr(
-  encryptionPrivateKey: Uint8Array, // Private key derived from player id
-  userPublicKey: string, // npub hex to filter events
+  encryptionKeys: { publicKey: string; privateKey: Uint8Array }, // Keys derived from player id
   signal?: AbortSignal
 ): Promise<HistoryPayload | null> {
   throwIfAborted(signal);
   const events = await pool.querySync(RELAYS, {
     kinds: [KIND_APP_DATA],
-    authors: [userPublicKey],
+    authors: [encryptionKeys.publicKey], // History events are authored by player id pubkey
     "#d": [D_TAG_HISTORY],
     limit: 1,
   });
@@ -322,16 +319,16 @@ export async function loadHistoryFromNostr(
   return decryptHistory(
     payload.ciphertext,
     payload.ephemeralPubKey,
-    encryptionPrivateKey
+    encryptionKeys.privateKey
   );
 }
 
 /**
  * Subscribe to history updates with full payload decryption
+ * History events are authored by the player id derived public key.
  */
 export function subscribeToHistoryDetailed(
-  userPublicKey: string,
-  encryptionPrivateKey: Uint8Array, // Private key derived from player id
+  encryptionKeys: { publicKey: string; privateKey: Uint8Array }, // Keys derived from player id
   onEvent: (payload: HistoryPayload) => void
 ): () => void {
   try {
@@ -339,7 +336,7 @@ export function subscribeToHistoryDetailed(
       RELAYS,
       {
         kinds: [KIND_APP_DATA],
-        authors: [userPublicKey],
+        authors: [encryptionKeys.publicKey], // History events are authored by player id pubkey
         "#d": [D_TAG_HISTORY],
       },
       {
@@ -349,7 +346,7 @@ export function subscribeToHistoryDetailed(
             const historyPayload = decryptHistory(
               payload.ciphertext,
               payload.ephemeralPubKey,
-              encryptionPrivateKey
+              encryptionKeys.privateKey
             );
             onEvent(historyPayload);
           } catch (err) {

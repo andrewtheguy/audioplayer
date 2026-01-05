@@ -18,10 +18,8 @@ interface LastOperation {
 
 interface UseNostrSyncOptions {
   history: HistoryEntry[];
-  // New identity-based props (playerId is used to derive encryptionKeys in useNostrSession)
+  // Keys derived from player id - used for both encryption/decryption AND signing
   encryptionKeys: { privateKey: Uint8Array; publicKey: string } | null;
-  pubkeyHex: string | null; // npub hex for filtering/authoring events
-  userPrivateKey: Uint8Array | null; // nsec bytes for signing events
   localSessionId: string;
   sessionStatus: SessionStatus;
   setSessionStatus: (status: SessionStatus) => void;
@@ -95,8 +93,6 @@ function getFingerprint(pubkeyHex: string): string {
 export function useNostrSync({
   history,
   encryptionKeys,
-  pubkeyHex,
-  userPrivateKey,
   localSessionId,
   sessionStatus,
   setSessionStatus,
@@ -134,20 +130,15 @@ export function useNostrSync({
   const pendingPublishRef = useRef<boolean>(false);
   const ignoreRemoteUntilRef = useRef<number>(ignoreRemoteUntil);
 
-  // Refs for identity data
+  // Ref for encryption keys (derived from player id)
   const encryptionKeysRef = useRef(encryptionKeys);
-  const pubkeyHexRef = useRef(pubkeyHex);
-  const userPrivateKeyRef = useRef(userPrivateKey);
 
   const isActive = useCallback(
     () => mountedRef.current && !abortRef.current?.signal.aborted,
     []
   );
 
-  const canSync = useCallback(
-    () => !!encryptionKeysRef.current && !!pubkeyHexRef.current,
-    []
-  );
+  const canSync = useCallback(() => !!encryptionKeysRef.current, []);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -178,9 +169,7 @@ export function useNostrSync({
 
   useEffect(() => {
     encryptionKeysRef.current = encryptionKeys;
-    pubkeyHexRef.current = pubkeyHex;
-    userPrivateKeyRef.current = userPrivateKey;
-  }, [encryptionKeys, pubkeyHex, userPrivateKey]);
+  }, [encryptionKeys]);
 
   useEffect(() => {
     if (!hasMountedRef.current) {
@@ -205,10 +194,8 @@ export function useNostrSync({
       if (signal?.aborted) return false;
 
       const keys = encryptionKeysRef.current;
-      const pubkey = pubkeyHexRef.current;
-      const signingKey = userPrivateKeyRef.current;
 
-      if (!keys || !pubkey || !signingKey) {
+      if (!keys) {
         console.warn("[nostr-sync] Cannot save: missing keys");
         return false;
       }
@@ -232,21 +219,14 @@ export function useNostrSync({
           setStatus("saving");
         }
         await withTimeout(
-          saveHistoryToNostr(
-            historyToSave,
-            keys.publicKey, // encryption public key (from player id)
-            signingKey, // signing key (nsec)
-            pubkey, // author public key (npub hex)
-            localSessionId,
-            signal
-          ),
+          saveHistoryToNostr(historyToSave, keys, localSessionId, signal),
           operationTimeoutMs
         );
         if (!isActive()) return false;
 
         latestTimestampRef.current = Date.now();
 
-        const fingerprint = getFingerprint(pubkey);
+        const fingerprint = getFingerprint(keys.publicKey);
         if (!isActive()) return false;
         setLastOperation({
           type: "saved",
@@ -351,9 +331,8 @@ export function useNostrSync({
       if (signal?.aborted) return;
 
       const keys = encryptionKeysRef.current;
-      const pubkey = pubkeyHexRef.current;
 
-      if (!keys || !pubkey) {
+      if (!keys) {
         console.warn("[nostr-sync] Cannot load: missing keys");
         return;
       }
@@ -370,12 +349,12 @@ export function useNostrSync({
 
       try {
         const cloudData = await withTimeout(
-          loadHistoryFromNostr(keys.privateKey, pubkey, signal),
+          loadHistoryFromNostr(keys, signal),
           operationTimeoutMs
         );
         if (!isActive()) return;
 
-        const fingerprint = getFingerprint(pubkey);
+        const fingerprint = getFingerprint(keys.publicKey);
         if (!isActive()) return;
         setLastOperation({
           type: "loaded",
@@ -455,9 +434,8 @@ export function useNostrSync({
     if (signal?.aborted) return;
 
     const keys = encryptionKeysRef.current;
-    const pubkey = pubkeyHexRef.current;
 
-    if (!keys || !pubkey) {
+    if (!keys) {
       return;
     }
 
@@ -466,12 +444,12 @@ export function useNostrSync({
 
     try {
       const cloudData = await withTimeout(
-        loadHistoryFromNostr(keys.privateKey, pubkey, signal),
+        loadHistoryFromNostr(keys, signal),
         operationTimeoutMs
       );
       if (!isActive()) return;
 
-      const fingerprint = getFingerprint(pubkey);
+      const fingerprint = getFingerprint(keys.publicKey);
       if (!isActive()) return;
       setLastOperation({
         type: "loaded",
@@ -539,36 +517,29 @@ export function useNostrSync({
 
   // Subscribe to history updates when we have encryption keys
   useEffect(() => {
-    if (!encryptionKeys || !pubkeyHex) return;
+    if (!encryptionKeys) return;
     let cancelled = false;
 
-    const cleanup = subscribeToHistoryDetailed(
-      pubkeyHex,
-      encryptionKeys.privateKey,
-      (payload) => {
-        if (cancelled) return;
-        handleRemoteEvent(payload);
-      }
-    );
+    const cleanup = subscribeToHistoryDetailed(encryptionKeys, (payload) => {
+      if (cancelled) return;
+      handleRemoteEvent(payload);
+    });
 
     return () => {
       cancelled = true;
       cleanup();
     };
-  }, [encryptionKeys, pubkeyHex, handleRemoteEvent]);
+  }, [encryptionKeys, handleRemoteEvent]);
 
   // Check session validity on visibility change
   useEffect(() => {
-    if (!encryptionKeys || !pubkeyHex) return;
+    if (!encryptionKeys) return;
 
     const checkSessionValidity = async () => {
       if (sessionStatusRef.current !== "active") return;
 
       try {
-        const cloudData = await loadHistoryFromNostr(
-          encryptionKeys.privateKey,
-          pubkeyHex
-        );
+        const cloudData = await loadHistoryFromNostr(encryptionKeys);
 
         if (cloudData) {
           const { sessionId: remoteSid, timestamp } = cloudData;
@@ -594,7 +565,7 @@ export function useNostrSync({
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [encryptionKeys, pubkeyHex, localSessionId, handleStaleSession]);
+  }, [encryptionKeys, localSessionId, handleStaleSession]);
 
   // Auto-save when history changes (debounced)
   useEffect(() => {
@@ -632,11 +603,11 @@ export function useNostrSync({
 
   // Initial load when keys become available
   useEffect(() => {
-    if (!encryptionKeys || !pubkeyHex) return;
+    if (!encryptionKeys) return;
     if (sessionStatusRef.current === "idle") {
       void performInitialLoad();
     }
-  }, [encryptionKeys, pubkeyHex, performInitialLoad]);
+  }, [encryptionKeys, performInitialLoad]);
 
   return {
     status: canSync() ? status : "idle",

@@ -64,22 +64,10 @@ export function NostrSyncPanel({
     rotatePlayerId,
   } = useNostrSession({ sessionId, onSessionStatusChange });
 
-  // Get user private key from localStorage for signing (if stored)
-  const [userPrivateKey, setUserPrivateKey] = useState<Uint8Array | null>(null);
-
-  useEffect(() => {
-    // We don't have nsec stored by default in new architecture
-    // User must provide it for initial setup only
-    // For normal operation, we only need the encryption keys from player id
-    setUserPrivateKey(null);
-  }, [npub]);
-
   const { status, message, lastOperation, setMessage, performSave, performLoad, startSession } =
     useNostrSync({
       history,
       encryptionKeys,
-      pubkeyHex,
-      userPrivateKey,
       localSessionId,
       sessionStatus,
       setSessionStatus,
