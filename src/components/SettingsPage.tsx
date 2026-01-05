@@ -11,7 +11,7 @@ import {
   generatePlayerId,
   generateSecondarySecret,
 } from "@/lib/nostr-crypto";
-import { clearSecondarySecret, getSecondarySecret, getStorageScope } from "@/lib/identity";
+import { clearSecondarySecret, getStorageScope } from "@/lib/identity";
 import { clearHistory } from "@/lib/history";
 import {
   loadHistoryFromNostr,
@@ -24,6 +24,7 @@ export function SettingsPage() {
   const navigate = useNavigate();
 
   const [nsecInput, setNsecInput] = useState("");
+  const [currentSecretInput, setCurrentSecretInput] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
   const [newSecondarySecret, setNewSecondarySecret] = useState<string | null>(null);
@@ -82,28 +83,35 @@ export function SettingsPage() {
     // Try to migrate history if not skipped
     let historyToMigrate: import("@/lib/history").HistoryEntry[] | null = null;
     if (!skipHistoryMigration) {
+      const trimmedSecret = currentSecretInput.trim();
+      if (!trimmedSecret) {
+        setMessage("Current secondary secret is required for history migration.");
+        setStatus("error");
+        return;
+      }
+
       try {
-        // Get the old secondary secret from localStorage
-        const fingerprint = await getStorageScope(pubkeyHex);
-        const oldSecret = getSecondarySecret(fingerprint);
+        // Load old player ID using the provided secret
+        const oldPlayerId = await loadPlayerIdFromNostr(pubkeyHex, trimmedSecret);
 
-        if (oldSecret) {
-          // Load old player ID
-          const oldPlayerId = await loadPlayerIdFromNostr(pubkeyHex, oldSecret);
+        if (oldPlayerId) {
+          // Derive old encryption keys and load history
+          const oldKeys = await deriveEncryptionKey(oldPlayerId);
+          const historyPayload = await loadHistoryFromNostr(oldKeys);
 
-          if (oldPlayerId) {
-            // Derive old encryption keys and load history
-            const oldKeys = await deriveEncryptionKey(oldPlayerId);
-            const historyPayload = await loadHistoryFromNostr(oldKeys);
-
-            if (historyPayload) {
-              historyToMigrate = historyPayload.history;
-            }
+          if (historyPayload) {
+            historyToMigrate = historyPayload.history;
           }
+        } else {
+          setMessage("Could not load player ID with the provided secret.");
+          setStatus("error");
+          return;
         }
       } catch (err) {
         console.warn("Failed to load history for migration:", err);
-        // Continue with rotation even if history migration fails
+        setMessage("Failed to load history with the provided secret.");
+        setStatus("error");
+        return;
       }
     }
 
@@ -173,6 +181,7 @@ export function SettingsPage() {
     }
     setMessage(messages.join(" "));
     setNsecInput("");
+    setCurrentSecretInput("");
     setDerivedNpub(null);
   };
 
@@ -239,6 +248,23 @@ export function SettingsPage() {
                 </div>
               )}
 
+              {!skipHistoryMigration && (
+                <div className="space-y-1">
+                  <label className="text-xs font-medium">Current secondary secret</label>
+                  <Input
+                    type="password"
+                    value={currentSecretInput}
+                    onChange={(e) => setCurrentSecretInput(e.target.value)}
+                    placeholder="Enter your current secondary secret"
+                    className="h-8 text-xs font-mono"
+                    disabled={status === "loading"}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Required to decrypt and migrate your history.
+                  </p>
+                </div>
+              )}
+
               <div className="flex items-start space-x-2">
                 <Checkbox
                   id="skip-history"
@@ -269,7 +295,7 @@ export function SettingsPage() {
                 variant="destructive"
                 size="sm"
                 onClick={handleRotatePlayerId}
-                disabled={status === "loading" || !derivedNpub}
+                disabled={status === "loading" || !derivedNpub || (!skipHistoryMigration && !currentSecretInput.trim())}
                 className="w-full h-8 text-xs"
               >
                 {status === "loading" ? "Rotating..." : "Rotate Player ID & Secret"}
