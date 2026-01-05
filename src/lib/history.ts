@@ -69,7 +69,11 @@ function trimHistory(history: HistoryEntry[]): HistoryEntry[] {
 function isValidHistoryPayload(value: unknown): value is HistoryPayload {
   if (typeof value !== "object" || value === null) return false;
   const payload = value as Record<string, unknown>;
-  return Array.isArray(payload.history) && typeof payload.timestamp === "number";
+  return (
+    Array.isArray(payload.history) &&
+    typeof payload.timestamp === "number" &&
+    (payload.sessionId === undefined || typeof payload.sessionId === "string")
+  );
 }
 
 /**
@@ -91,7 +95,7 @@ function getHistoryPayload(fingerprint: string | undefined): HistoryPayload | nu
       return {
         history: trimHistory(validated),
         timestamp: parsed.timestamp,
-        sessionId: typeof parsed.sessionId === "string" ? parsed.sessionId : undefined,
+        sessionId: parsed.sessionId,
       };
     }
 
