@@ -273,7 +273,7 @@ export class HlsAudioDecoder {
         const source = this.ctx.createBufferSource();
         source.buffer = buffer;
         source.connect(this.outputNode);
-        source.onended = () => {
+        const cleanup = () => {
           const index = this.sources.indexOf(source);
           if (index >= 0) {
             this.sources.splice(index, 1);
@@ -297,11 +297,14 @@ export class HlsAudioDecoder {
         if (this.nextSegmentIndex === this.segments.length - 1) {
           source.onended = () => {
             if (token !== this.scheduleToken) return;
+            cleanup();
             if (!this.isPlaying) return;
             this.isPlaying = false;
             this.callbacks.onState(false);
             this.callbacks.onEnded();
           };
+        } else {
+          source.onended = cleanup;
         }
         source.start(startTime, segmentOffset);
         this.sources.push(source);
