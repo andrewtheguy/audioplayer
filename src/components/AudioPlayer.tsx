@@ -116,6 +116,8 @@ function AudioPlayerInner({
   const [isEditingNowPlaying, setIsEditingNowPlaying] = useState(false);
   const [nowPlayingTitleDraft, setNowPlayingTitleDraft] = useState("");
   const wasViewOnlyRef = useRef(false);
+  const pendingLoadRef = useRef<{ entry: HistoryEntry; options?: { forceReset?: boolean } } | null>(null);
+  const pendingUrlLoadRef = useRef<string | null>(null);
 
   const isIOSSafari = useMemo(() => {
     if (typeof navigator === "undefined") return false;
@@ -329,12 +331,7 @@ function AudioPlayerInner({
     decoderRef.current = decoder;
 
     try {
-      const { isLive } = await decoder.load();
-      if (isLive) {
-        setError("Live HLS is not supported for decoded playback.");
-        stopDecodedPlayback();
-        return false;
-      }
+      await decoder.load();
       if (typeof startPosition === "number" && isFinite(startPosition)) {
         decoder.seek(startPosition);
       }
@@ -495,12 +492,16 @@ function AudioPlayerInner({
       pendingSeekTimerRef.current = null;
     }
     const urlToLoad = entry.url;
-
+    const useDecoded = shouldUseDecodedHls(urlToLoad);
     const audio = audioRef.current;
-    if (!audio) return;
-    audio.crossOrigin = "anonymous";
 
-    if (options?.forceReset) {
+    if (!useDecoded && !audio) {
+      pendingLoadRef.current = { entry, options };
+      setIsDecodedHls(false);
+      return;
+    }
+
+    if (options?.forceReset && audio) {
       audio.pause();
       audio.src = "";
       audio.load();
@@ -511,12 +512,13 @@ function AudioPlayerInner({
       hlsRef.current = null;
     }
 
-    const useDecoded = shouldUseDecodedHls(urlToLoad);
     if (useDecoded) {
       stopDecodedPlayback();
-      audio.pause();
-      audio.src = "";
-      audio.load();
+      if (audio) {
+        audio.pause();
+        audio.src = "";
+        audio.load();
+      }
     }
 
     currentUrlRef.current = urlToLoad;
@@ -544,6 +546,8 @@ function AudioPlayerInner({
     }
 
     stopDecodedPlayback();
+    if (!audio) return;
+    audio.crossOrigin = "anonymous";
 
     if (urlToLoad.includes(".m3u8")) {
       if (Hls.isSupported()) {
@@ -589,7 +593,7 @@ function AudioPlayerInner({
   }, [saveHistoryEntry, shouldUseDecodedHls, startDecodedPlayback, stopDecodedPlayback]);
 
   // Load a URL - redirects to loadFromHistory if URL exists in history
-  const loadUrl = (urlToLoad: string) => {
+  const loadUrl = useCallback((urlToLoad: string) => {
     const resolvedTitle = normalizeTitle(title);
     const historyEntry = history.find((h) => h.url === urlToLoad);
     if (historyEntry) {
@@ -624,8 +628,13 @@ function AudioPlayerInner({
     setGain(1);
     pendingSeekPositionRef.current = null;
 
+    const useDecoded = shouldUseDecodedHls(urlToLoad);
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!useDecoded && !audio) {
+      pendingUrlLoadRef.current = urlToLoad;
+      setIsDecodedHls(false);
+      return;
+    }
 
     if (hlsRef.current) {
       hlsRef.current.destroy();
@@ -648,12 +657,13 @@ function AudioPlayerInner({
       saveHistoryEntry(0, { allowLive: true });
     };
 
-    const useDecoded = shouldUseDecodedHls(urlToLoad);
     if (useDecoded) {
       stopDecodedPlayback();
-      audio.pause();
-      audio.src = "";
-      audio.load();
+      if (audio) {
+        audio.pause();
+        audio.src = "";
+        audio.load();
+      }
       void startDecodedPlayback(urlToLoad, 0).then((success) => {
         if (success) {
           onLoadSuccess();
@@ -663,6 +673,8 @@ function AudioPlayerInner({
     }
 
     stopDecodedPlayback();
+    if (!audio) return;
+    audio.crossOrigin = "anonymous";
 
     if (urlToLoad.includes(".m3u8")) {
       if (Hls.isSupported()) {
@@ -699,7 +711,23 @@ function AudioPlayerInner({
       audio.src = urlToLoad;
       onLoadSuccess();
     }
-  };
+  }, [history, loadFromHistory, saveHistoryEntry, shouldUseDecodedHls, startDecodedPlayback, stopDecodedPlayback, title]);
+
+  useEffect(() => {
+    if (!pendingLoadRef.current) return;
+    if (!audioRef.current) return;
+    const pending = pendingLoadRef.current;
+    pendingLoadRef.current = null;
+    loadFromHistory(pending.entry, pending.options);
+  }, [isDecodedHls, loadFromHistory]);
+
+  useEffect(() => {
+    if (!pendingUrlLoadRef.current) return;
+    if (!audioRef.current) return;
+    const pending = pendingUrlLoadRef.current;
+    pendingUrlLoadRef.current = null;
+    loadUrl(pending);
+  }, [isDecodedHls, loadUrl]);
 
   // Load from URL input
   const loadStream = () => {
@@ -898,6 +926,7 @@ function AudioPlayerInner({
   };
 
   const seekRelative = useCallback((seconds: number) => {
+    if (isLiveStreamRef.current) return;
     if (isDecodedHls && decoderRef.current) {
       const newTime = Math.max(0, Math.min(duration || 0, currentTime + seconds));
       decoderRef.current.seek(newTime);
@@ -914,7 +943,12 @@ function AudioPlayerInner({
 
   const jumpToLiveEdge = () => {
     if (!isLiveStream) return;
-    if (isDecodedHls) return;
+    if (isDecodedHls && decoderRef.current) {
+      resumeAudioGraph();
+      decoderRef.current.jumpToLiveEdge();
+      decoderRef.current.play();
+      return;
+    }
 
     const audio = audioRef.current;
     if (!audio) return;

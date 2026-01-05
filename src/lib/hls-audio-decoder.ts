@@ -5,6 +5,7 @@ type Segment = {
   url: string;
   duration: number;
   start: number;
+  sequence?: number;
 };
 
 type LoadResult = {
@@ -40,6 +41,8 @@ function parsePlaylist(text: string, baseUrl: string): {
   playlists: string[];
   segments: Segment[];
   isLive: boolean;
+  mediaSequence: number;
+  targetDuration: number;
 } {
   const parser = new Parser();
   parser.push(text);
@@ -48,6 +51,8 @@ function parsePlaylist(text: string, baseUrl: string): {
     playlists?: Array<{ uri: string }>;
     segments?: Array<{ duration: number; uri: string }>;
     endList?: boolean;
+    mediaSequence?: number;
+    targetDuration?: number;
   };
 
   const playlists = ((manifest.playlists ?? []) as Array<{ uri: string }>).map((playlist) =>
@@ -55,6 +60,7 @@ function parsePlaylist(text: string, baseUrl: string): {
   );
   const segments: Segment[] = [];
   let cursor = 0;
+  const mediaSequence = typeof manifest.mediaSequence === "number" ? manifest.mediaSequence : 0;
   for (const segment of manifest.segments ?? []) {
     const duration = typeof segment.duration === "number" ? segment.duration : 0;
     const url = resolveUrl(baseUrl, segment.uri);
@@ -62,15 +68,19 @@ function parsePlaylist(text: string, baseUrl: string): {
       url,
       duration,
       start: cursor,
+      sequence: mediaSequence + segments.length,
     });
     cursor += duration;
   }
 
+  const isLive = manifest.endList !== true;
   return {
     isMaster: playlists.length > 0,
     playlists,
     segments,
-    isLive: manifest.endList === false,
+    isLive,
+    mediaSequence,
+    targetDuration: typeof manifest.targetDuration === "number" ? manifest.targetDuration : 6,
   };
 }
 
@@ -82,6 +92,7 @@ export class HlsAudioDecoder {
   private segments: Segment[] = [];
   private duration = 0;
   private isLive = false;
+  private mode: "vod" | "live" = "vod";
   private isLoaded = false;
   private isPlaying = false;
   private startCtxTime = 0;
@@ -91,6 +102,11 @@ export class HlsAudioDecoder {
   private nextSegmentIndex = 0;
   private startSegmentIndex = 0;
   private scheduleToken = 0;
+  private playlistUrl: string | null = null;
+  private targetDuration = 6;
+  private liveQueue: Segment[] = [];
+  private pollTimer: number | null = null;
+  private lastSequenceSeen: number | null = null;
   private sources: AudioBufferSourceNode[] = [];
   private timeRaf: number | null = null;
   private scheduling = false;
@@ -117,18 +133,27 @@ export class HlsAudioDecoder {
       const mediaParsed = parsePlaylist(mediaText, mediaUrl);
       this.segments = mediaParsed.segments;
       this.isLive = mediaParsed.isLive;
+      this.playlistUrl = mediaUrl;
+      this.targetDuration = mediaParsed.targetDuration;
     } else {
       this.segments = parsed.segments;
       this.isLive = parsed.isLive;
+      this.playlistUrl = this.url;
+      this.targetDuration = parsed.targetDuration;
     }
 
     if (this.segments.length === 0) {
       throw new Error("HLS playlist has no audio segments.");
     }
 
-    this.duration = this.segments.reduce((sum, segment) => sum + segment.duration, 0);
+    this.mode = this.isLive ? "live" : "vod";
+    this.duration = this.isLive ? 0 : this.segments.reduce((sum, segment) => sum + segment.duration, 0);
     this.isLoaded = true;
     this.callbacks.onDuration(this.duration, this.isLive);
+
+    if (this.isLive) {
+      await this.refreshLivePlaylist(true);
+    }
     return { duration: this.duration, isLive: this.isLive };
   }
 
@@ -140,7 +165,11 @@ export class HlsAudioDecoder {
     if (!this.isLoaded || this.isPlaying) return;
     this.isPlaying = true;
     this.callbacks.onState(true);
-    this.startScheduling(this.currentTime);
+    if (this.mode === "live") {
+      this.startLivePlayback();
+    } else {
+      this.startScheduling(this.currentTime);
+    }
     this.startClock();
   }
 
@@ -150,12 +179,16 @@ export class HlsAudioDecoder {
     this.isPlaying = false;
     this.callbacks.onState(false);
     this.scheduleToken += 1;
+    this.stopLivePolling();
     this.stopSources();
     this.stopClock();
   }
 
   seek(time: number): void {
     if (!this.isLoaded) return;
+    if (this.mode === "live") {
+      return;
+    }
     const nextTime = Math.max(0, Math.min(this.duration, time));
     this.currentTime = nextTime;
     if (!this.isPlaying) {
@@ -168,10 +201,19 @@ export class HlsAudioDecoder {
     this.startScheduling(this.currentTime);
   }
 
+  jumpToLiveEdge(): void {
+    if (this.mode !== "live") return;
+    this.scheduleToken += 1;
+    this.stopSources();
+    this.scheduling = false;
+    this.startLivePlayback();
+  }
+
   stop(): void {
     this.isPlaying = false;
     this.stopped = true;
     this.scheduleToken += 1;
+    this.stopLivePolling();
     this.stopSources();
     this.stopClock();
   }
@@ -187,6 +229,17 @@ export class HlsAudioDecoder {
     this.startCtxTime = this.ctx.currentTime + START_DELAY_SECONDS;
     this.scheduleCursor = this.startCtxTime;
     void this.scheduleLoop(this.scheduleToken, startTime - this.segments[index].start);
+  }
+
+  private startLivePlayback(): void {
+    if (this.scheduling || this.stopped) return;
+    this.scheduleToken += 1;
+    this.startMediaTime = 0;
+    this.currentTime = 0;
+    this.startCtxTime = this.ctx.currentTime + START_DELAY_SECONDS;
+    this.scheduleCursor = this.startCtxTime;
+    this.startLivePolling();
+    void this.scheduleLiveLoop(this.scheduleToken);
   }
 
   private async scheduleLoop(token: number, initialOffset: number): Promise<void> {
@@ -245,6 +298,107 @@ export class HlsAudioDecoder {
       }
     } finally {
       this.scheduling = false;
+    }
+  }
+
+  private async scheduleLiveLoop(token: number): Promise<void> {
+    if (this.scheduling) return;
+    this.scheduling = true;
+
+    try {
+      while (this.isPlaying && !this.stopped) {
+        if (token !== this.scheduleToken) {
+          break;
+        }
+        if (this.scheduleCursor - this.ctx.currentTime > BUFFER_AHEAD_SECONDS) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          continue;
+        }
+        const segment = this.liveQueue.shift();
+        if (!segment) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          continue;
+        }
+
+        let buffer: AudioBuffer;
+        try {
+          buffer = await this.decodeSegment(segment.url);
+        } catch (err) {
+          this.callbacks.onError(`Failed to decode segment: ${segment.url} (${(err as Error).message})`);
+          this.pause();
+          break;
+        }
+
+        if (!this.isPlaying || token !== this.scheduleToken) break;
+
+        const source = this.ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.outputNode);
+
+        const startTime = Math.max(this.scheduleCursor, this.ctx.currentTime + 0.02);
+        source.start(startTime);
+        this.sources.push(source);
+        this.scheduleCursor = startTime + buffer.duration;
+      }
+    } finally {
+      this.scheduling = false;
+    }
+  }
+
+  private startLivePolling(): void {
+    if (!this.playlistUrl) return;
+    if (this.pollTimer !== null) return;
+    const intervalMs = Math.max(2000, Math.floor(this.targetDuration * 500));
+    this.pollTimer = window.setInterval(() => {
+      void this.refreshLivePlaylist(false);
+    }, intervalMs);
+  }
+
+  private stopLivePolling(): void {
+    if (this.pollTimer !== null) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+  }
+
+  private async refreshLivePlaylist(initial: boolean): Promise<void> {
+    if (!this.playlistUrl) return;
+    let text: string;
+    try {
+      text = await fetchText(this.playlistUrl);
+    } catch (err) {
+      if (initial) {
+        throw err;
+      }
+      return;
+    }
+    const parsed = parsePlaylist(text, this.playlistUrl);
+    if (!parsed.isLive) {
+      this.isLive = false;
+      this.mode = "vod";
+      return;
+    }
+
+    const segments = parsed.segments;
+    if (segments.length === 0) return;
+
+    const lastSegment = segments[segments.length - 1];
+    const lastSequence = typeof lastSegment.sequence === "number" ? lastSegment.sequence : null;
+
+    if (initial || this.lastSequenceSeen === null) {
+      const startIndex = Math.max(0, segments.length - 3);
+      this.liveQueue = segments.slice(startIndex);
+      this.lastSequenceSeen = lastSequence;
+      return;
+    }
+
+    const newSegments = segments.filter((seg) => {
+      if (typeof seg.sequence !== "number") return false;
+      return this.lastSequenceSeen === null || seg.sequence > this.lastSequenceSeen;
+    });
+    if (newSegments.length > 0) {
+      this.liveQueue.push(...newSegments);
+      this.lastSequenceSeen = lastSequence;
     }
   }
 
