@@ -1511,21 +1511,6 @@ function AudioPlayerInner({
           </div>
         )}
 
-        {showMeter && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-              <span>Meter</span>
-              <span>{Math.round(meterLevel * 100)}%</span>
-            </div>
-            <div className="h-2 rounded bg-muted overflow-hidden">
-              <div
-                className="h-full bg-emerald-500 transition-[width] duration-75"
-                style={{ width: `${Math.min(100, Math.round(meterLevel * 100))}%` }}
-              />
-            </div>
-          </div>
-        )}
-
         {/* Gain Control */}
         <div className="flex items-center gap-3">
           <button
@@ -1567,6 +1552,21 @@ function AudioPlayerInner({
             Meter
           </label>
         </div>
+
+        {showMeter && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>Meter</span>
+              <span>{Math.round(meterLevel * 100)}%</span>
+            </div>
+            <div className="h-2 rounded bg-muted overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 transition-[width] duration-75"
+                style={{ width: `${Math.min(100, Math.round(meterLevel * 100))}%` }}
+              />
+            </div>
+          </div>
+        )}
         </div>
       )}
 
