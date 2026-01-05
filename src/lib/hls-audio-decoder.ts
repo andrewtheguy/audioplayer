@@ -272,6 +272,18 @@ export class HlsAudioDecoder {
         const source = this.ctx.createBufferSource();
         source.buffer = buffer;
         source.connect(this.outputNode);
+        source.onended = () => {
+          const index = this.sources.indexOf(source);
+          if (index >= 0) {
+            this.sources.splice(index, 1);
+          }
+          source.onended = null;
+          try {
+            source.disconnect();
+          } catch {
+            // ignore
+          }
+        };
 
         const segmentOffset = this.nextSegmentIndex === this.startSegmentIndex ? offset : 0;
         const playDuration = Math.max(0, buffer.duration - segmentOffset);
@@ -336,6 +348,18 @@ export class HlsAudioDecoder {
         const source = this.ctx.createBufferSource();
         source.buffer = buffer;
         source.connect(this.outputNode);
+        source.onended = () => {
+          const index = this.sources.indexOf(source);
+          if (index >= 0) {
+            this.sources.splice(index, 1);
+          }
+          source.onended = null;
+          try {
+            source.disconnect();
+          } catch {
+            // ignore
+          }
+        };
 
         const startTime = Math.max(this.scheduleCursor, this.ctx.currentTime + 0.02);
         source.start(startTime);
