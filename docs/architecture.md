@@ -34,7 +34,7 @@ URL: #npub1abc...xyz
 **Key points:**
 - **npub**: Public, safe to share in URL - identifies the user
 - **Secondary secret**: User-controlled, encrypts player ID only, must be transferred manually between devices
-- **Player ID**: 32 bytes hex, fetched from relay (not cached locally), derives keys for history
+- **Player ID**: 43-char URL-safe base64 (32 bytes), fetched from relay (not cached locally), derives keys for history
 - **nsec**: Only needed for initial setup and player ID rotation (signs player ID events)
 - **History events**: Authored by player ID public key (not npub), encrypted with player ID derived keys
 
@@ -83,7 +83,7 @@ Manages identity, player ID, and session state:
 - **Setup Flow**: If no player ID exists, requires nsec to create initial one
 - **Key Derivation**: Derives encryption keys from player ID via HKDF-SHA256
 - **Takeover Grace**: Provides `ignoreRemoteUntil` timestamp to suppress remote events briefly after takeover
-- **Session ID**: Generates unique session IDs via `crypto.randomUUID()`
+- **Session ID**: Generates unique session IDs via `generateSessionId()` (32-char hex, 16 bytes)
 
 **Key actions:**
 - `submitSecondarySecret(secret)`: Stores secret, attempts to load player ID from relay
@@ -248,14 +248,13 @@ All localStorage keys are scoped by npub fingerprint for isolation:
 |-------------|-------------|
 | `com.audioplayer.secondary-secret.{fingerprint}` | Secondary secret for this npub |
 | `com.audioplayer.nsec.{fingerprint}` | Optional stored nsec (user convenience) |
-| `com.audioplayer.history.v1.{fingerprint}` | History entries array |
-| `com.audioplayer.history.timestamp.{fingerprint}` | Last update timestamp |
+| `com.audioplayer.history.v1.{fingerprint}` | History payload (entries + timestamp + sessionId) |
 
 The fingerprint is a 32-character hex string (first 128 bits of SHA-256 hash of the pubkeyHex).
 
 **Key functions:**
 
-- `getNpubFingerprint(pubkeyHex)`: Generates 32-char hex fingerprint from pubkey (async, uses SubtleCrypto)
+- `getStorageScope(pubkeyHex)`: Generates 32-char hex fingerprint from pubkey for localStorage scoping (async, uses SubtleCrypto)
 - `getSecondarySecret(fingerprint)`: Retrieves secondary secret from localStorage
 - `setSecondarySecret(fingerprint, secret)`: Stores secondary secret
 - `getStoredNsec(fingerprint)`: Retrieves optional stored nsec
@@ -286,8 +285,9 @@ interface HistoryPayload {
 
 **Key functions:**
 
-- `getHistory(fingerprint?)`: Retrieves validated history from localStorage (scoped by fingerprint)
-- `saveHistory(history, fingerprint?)`: Persists history with timestamp for cross-tab sync (scoped by fingerprint)
+- `getHistory(fingerprint?)`: Retrieves validated history entries from localStorage (scoped by fingerprint)
+- `getHistoryTimestamp(fingerprint?)`: Retrieves timestamp of last history update (for cross-tab sync)
+- `saveHistory(history, fingerprint?, sessionId?)`: Persists history payload atomically (entries + timestamp + sessionId)
 - `validateHistoryPayload()` lives in `nostr-crypto.ts` (payload validation after decryption)
 - Max 100 entries (trimmed on save)
 
@@ -318,7 +318,7 @@ Nostr protocol integration for cloud sync.
 - Signed by player ID derived private key
 
 **Session tag strategy**
-- UUIDv4 generated via `crypto.randomUUID()` per client session (122 bits of randomness).
+- 32-char hex string (16 bytes) generated via `generateSessionId()` per client session (128 bits of randomness).
 
 **Stale-session detection**
 - Real-time subscription detects remote session activity via `HistoryPayload.sessionId`. When a remote event with a different sessionId arrives, the local session transitions to `stale` status only if currently `active`. Idle sessions stay idle (they haven't claimed the session yet).
@@ -347,9 +347,14 @@ Nostr protocol integration for cloud sync.
 Cryptographic utilities for secure sync.
 
 **Player ID format:**
-- 32 bytes random, hex encoded (64 characters)
+- 32 bytes random, URL-safe base64 encoded (43 characters, no padding)
+- Characters: A-Z, a-z, 0-9, `-`, `_`
 - `generatePlayerId()`: Creates new player ID
-- `isValidPlayerId(playerId)`: Validates length and hex format
+- `isValidPlayerId(playerId)`: Validates length and URL-safe base64 format
+
+**Session ID format:**
+- 16 bytes random, hex encoded (32 characters)
+- `generateSessionId()`: Creates new session ID for multi-device coordination
 
 **Secondary secret format:**
 - 11 bytes random + 1 byte CRC-8 checksum = 12 bytes total
@@ -504,5 +509,5 @@ No global state management library is used; state flows through props.
 Local cross-tab synchronization via visibility API:
 
 1. On pause, record `pausedAtTimestamp`
-2. On tab visibility, check fingerprint-scoped timestamp key in localStorage (via `getTimestampStorageKey(fingerprint)`)
+2. On tab visibility, check history timestamp via `getHistoryTimestamp(fingerprint)` (stored atomically with history payload)
 3. If history was updated after pause, reload latest entry from scoped storage
