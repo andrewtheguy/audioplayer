@@ -27,7 +27,26 @@ Key features:
 - Playback position tracking and restoration
 - Pending seek mechanism with retry logic for reliable position sync
 - Web Audio API gain control for volume boost beyond 100%
+- iOS Safari HLS workaround: a decoded Web Audio pipeline (m3u8-parser + mux.js) is used so GainNode/meter work on HLS streams, including live playlists
 - History management with auto-save every 5 seconds during playback (non-live streams)
+
+#### GainNode workaround (iOS Safari + HLS)
+
+iOS Safari routes native HLS playback outside the Web Audio graph, so GainNode and the meter do not work with a normal `<audio>` element. To keep Boost and the meter functional, the player switches to a decoded pipeline for HLS on iOS Safari:
+
+- Parse HLS playlists with `m3u8-parser`.
+- Fetch TS segments directly and transmux to fMP4 with `mux.js`.
+- Decode via `AudioContext.decodeAudioData` and schedule `AudioBufferSourceNode` into the GainNode/AnalyserNode chain.
+- For live playlists, use an explicit buffering strategy: compute the live edge from the last playlist segment (or `EXT-X-PROGRAM-DATE-TIME` when present), maintain a sliding window of the newest 3–6 segments (~6–12s), deduplicate deterministically, and drop segments older than the window. Dedup keys: use the segment sequence number as the primary key; fall back to URI when sequence is missing. Track a mapping of `sequence -> last-seen URI` to detect CDN-regenerated URLs; treat segments with the same sequence as identical even if URI changes (handle discontinuities and wrap-around), and when sequences are unavailable rely on URI comparison and expire mapping entries once segments fall outside the sliding window. Poll the playlist at half the target segment duration (min 1s). Fetch/decode with bounded concurrency to avoid overload. If playback drift exceeds one segment, resync by re-fetching the playlist and resetting the window.
+
+This path is only used for iOS Safari + `.m3u8` URLs; all other browsers use the native `<audio>` element with hls.js.
+
+Additional tradeoffs and safeguards:
+
+- **Memory tradeoffs:** decoded segments are held as `AudioBuffer`s and scheduled via `AudioBufferSourceNode`s. Memory per segment varies by duration/sample rate/bit depth; measure with the browser’s memory tools and estimate roughly as `seconds * sampleRate * channels * 4 bytes` for PCM. Long-running or live streams can grow without bounds unless you cap retention. Recommended defaults: use 6–12s as the active low-latency buffer for normal playback, with a soft upper memory safety cap of 12–24s to absorb decode latency/jitter or brief retention spikes. Map strategy to cap: low-latency (keep 6–12s, evict oldest immediately), balanced (keep ~12s with LRU eviction), tolerant (allow up to 24s with downsampling/trim of older buffers). **Implemented:** a hard 60s cap for live queue and VOD scheduling. **Not implemented yet:** LRU eviction or downsampling/trim, and telemetry-based tuning. The cap is configurable per deployment; add telemetry to validate and tune values.
+- **Browser detection:** current selection uses UA sniffing (iOS + Safari). Checks are: iOS detection via `/iP(hone|od|ad)/` or `navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1`, and Safari detection via `/Safari/` without `CriOS|FxiOS|EdgiOS|OPiOS`. Caveat: UA strings change; iOS requires WebKit for all browsers, so Safari detection is heuristic. Prefer feature detection where possible and fall back to guarded UA checks with telemetry to verify behavior. Always validate on physical iOS devices (iPhone, iPad, iPad with keyboard/mouse/trackpad and external accessories) and real Safari builds before shipping, including iPadOS variants and accessory-attached modes. CDN/proxy layers can alter UA or headers; verify in-production requests and pair guarded UA fallbacks with feature detection plus telemetry/field metrics. **Implemented:** UA-based checks only. **Not implemented yet:** feature-detection gating and telemetry-backed validation.
+- **Failure recovery:** if segment fetch/transmux/decode fails, log metrics, retry with bounded backoff (recommended defaults: 2–3 retries per segment, then drop), and clear/repair the AudioBuffer queue by resetting the live window. **Implemented:** per-segment retries with bounded backoff and queue resets after consecutive failures. **Not implemented yet:** percent-based failure thresholds (e.g., >10% of segments in 1 minute) and automatic native `<audio>` fallback. Implementers may tune defaults per environment; record chosen values and report deviations in telemetry/notes.
+- **Native `<audio>` fallback:** when activated (automatic after the failure threshold or manual user toggle), stop the decoded pipeline (stop fetching/transmux/decoding, clear the AudioBuffer queue), reset playback state to a single native media element timeline (preserve position/seek where possible), and accept feature loss (Boost, Web Audio meter/processing, custom gain/latency control). UI should show a user-facing notice and emit metrics/events with fallback reason and failure counts. To revert back, require a full reinitialization sequence (recreate AudioContext/nodes, rebuild queue, restart decoding) to avoid mixed pipelines. **Not implemented yet.**
 
 ### NostrSyncPanel (`components/NostrSyncPanel.tsx`)
 

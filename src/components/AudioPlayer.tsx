@@ -106,6 +106,7 @@ function AudioPlayerInner({
   const [gainEnabled, setGainEnabled] = useState(false);
   const [gain, setGain] = useState(1); // 1 = 100%
   const [meterLevel, setMeterLevel] = useState(0);
+  const [showMeter, setShowMeter] = useState(false);
   const [isDecodedHls, setIsDecodedHls] = useState(false);
   const [isViewOnly, setIsViewOnly] = useState(false);
   const [actualSessionStatus, setActualSessionStatus] = useState<"idle" | "active" | "stale" | "invalid" | "unknown">("unknown");
@@ -116,6 +117,8 @@ function AudioPlayerInner({
   const [isEditingNowPlaying, setIsEditingNowPlaying] = useState(false);
   const [nowPlayingTitleDraft, setNowPlayingTitleDraft] = useState("");
   const wasViewOnlyRef = useRef(false);
+  const pendingLoadRef = useRef<{ entry: HistoryEntry; options?: { forceReset?: boolean } } | null>(null);
+  const pendingUrlLoadRef = useRef<string | null>(null);
 
   const isIOSSafari = useMemo(() => {
     if (typeof navigator === "undefined") return false;
@@ -127,10 +130,18 @@ function AudioPlayerInner({
     return isIOS && isSafari;
   }, []);
 
-  const shouldUseDecodedHls = useCallback(
-    (nextUrl: string) => isIOSSafari && nextUrl.includes(".m3u8"),
-    [isIOSSafari]
-  );
+  const shouldUseDecodedHls = useCallback((nextUrl: string) => {
+    if (!isIOSSafari) return false;
+    try {
+      const parsed = new URL(nextUrl);
+      const pathname = parsed.pathname.toLowerCase();
+      if (pathname.endsWith(".m3u8")) return true;
+      const format = parsed.searchParams.get("format");
+      return format === "m3u8" || format === "hls";
+    } catch {
+      return false;
+    }
+  }, [isIOSSafari]);
 
 
   // Keep refs in sync with state for use in callbacks
@@ -329,12 +340,7 @@ function AudioPlayerInner({
     decoderRef.current = decoder;
 
     try {
-      const { isLive } = await decoder.load();
-      if (isLive) {
-        setError("Live HLS is not supported for decoded playback.");
-        stopDecodedPlayback();
-        return false;
-      }
+      await decoder.load();
       if (typeof startPosition === "number" && isFinite(startPosition)) {
         decoder.seek(startPosition);
       }
@@ -495,12 +501,16 @@ function AudioPlayerInner({
       pendingSeekTimerRef.current = null;
     }
     const urlToLoad = entry.url;
-
+    const useDecoded = shouldUseDecodedHls(urlToLoad);
     const audio = audioRef.current;
-    if (!audio) return;
-    audio.crossOrigin = "anonymous";
 
-    if (options?.forceReset) {
+    if (!useDecoded && !audio) {
+      pendingLoadRef.current = { entry, options };
+      setIsDecodedHls(false);
+      return;
+    }
+
+    if (options?.forceReset && audio) {
       audio.pause();
       audio.src = "";
       audio.load();
@@ -511,12 +521,13 @@ function AudioPlayerInner({
       hlsRef.current = null;
     }
 
-    const useDecoded = shouldUseDecodedHls(urlToLoad);
     if (useDecoded) {
       stopDecodedPlayback();
-      audio.pause();
-      audio.src = "";
-      audio.load();
+      if (audio) {
+        audio.pause();
+        audio.src = "";
+        audio.load();
+      }
     }
 
     currentUrlRef.current = urlToLoad;
@@ -544,6 +555,8 @@ function AudioPlayerInner({
     }
 
     stopDecodedPlayback();
+    if (!audio) return;
+    audio.crossOrigin = "anonymous";
 
     if (urlToLoad.includes(".m3u8")) {
       if (Hls.isSupported()) {
@@ -589,7 +602,7 @@ function AudioPlayerInner({
   }, [saveHistoryEntry, shouldUseDecodedHls, startDecodedPlayback, stopDecodedPlayback]);
 
   // Load a URL - redirects to loadFromHistory if URL exists in history
-  const loadUrl = (urlToLoad: string) => {
+  const loadUrl = useCallback((urlToLoad: string) => {
     const resolvedTitle = normalizeTitle(title);
     const historyEntry = history.find((h) => h.url === urlToLoad);
     if (historyEntry) {
@@ -624,8 +637,13 @@ function AudioPlayerInner({
     setGain(1);
     pendingSeekPositionRef.current = null;
 
+    const useDecoded = shouldUseDecodedHls(urlToLoad);
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!useDecoded && !audio) {
+      pendingUrlLoadRef.current = urlToLoad;
+      setIsDecodedHls(false);
+      return;
+    }
 
     if (hlsRef.current) {
       hlsRef.current.destroy();
@@ -648,12 +666,13 @@ function AudioPlayerInner({
       saveHistoryEntry(0, { allowLive: true });
     };
 
-    const useDecoded = shouldUseDecodedHls(urlToLoad);
     if (useDecoded) {
       stopDecodedPlayback();
-      audio.pause();
-      audio.src = "";
-      audio.load();
+      if (audio) {
+        audio.pause();
+        audio.src = "";
+        audio.load();
+      }
       void startDecodedPlayback(urlToLoad, 0).then((success) => {
         if (success) {
           onLoadSuccess();
@@ -663,6 +682,8 @@ function AudioPlayerInner({
     }
 
     stopDecodedPlayback();
+    if (!audio) return;
+    audio.crossOrigin = "anonymous";
 
     if (urlToLoad.includes(".m3u8")) {
       if (Hls.isSupported()) {
@@ -699,7 +720,23 @@ function AudioPlayerInner({
       audio.src = urlToLoad;
       onLoadSuccess();
     }
-  };
+  }, [history, loadFromHistory, saveHistoryEntry, shouldUseDecodedHls, startDecodedPlayback, stopDecodedPlayback, title]);
+
+  useEffect(() => {
+    if (!pendingLoadRef.current) return;
+    if (!audioRef.current) return;
+    const pending = pendingLoadRef.current;
+    pendingLoadRef.current = null;
+    loadFromHistory(pending.entry, pending.options);
+  }, [isDecodedHls, loadFromHistory]);
+
+  useEffect(() => {
+    if (!pendingUrlLoadRef.current) return;
+    if (!audioRef.current) return;
+    const pending = pendingUrlLoadRef.current;
+    pendingUrlLoadRef.current = null;
+    loadUrl(pending);
+  }, [isDecodedHls, loadUrl]);
 
   // Load from URL input
   const loadStream = () => {
@@ -898,6 +935,7 @@ function AudioPlayerInner({
   };
 
   const seekRelative = useCallback((seconds: number) => {
+    if (isLiveStreamRef.current) return;
     if (isDecodedHls && decoderRef.current) {
       const newTime = Math.max(0, Math.min(duration || 0, currentTime + seconds));
       decoderRef.current.seek(newTime);
@@ -914,7 +952,12 @@ function AudioPlayerInner({
 
   const jumpToLiveEdge = () => {
     if (!isLiveStream) return;
-    if (isDecodedHls) return;
+    if (isDecodedHls && decoderRef.current) {
+      resumeAudioGraph();
+      decoderRef.current.jumpToLiveEdge();
+      decoderRef.current.play();
+      return;
+    }
 
     const audio = audioRef.current;
     if (!audio) return;
@@ -1468,20 +1511,6 @@ function AudioPlayerInner({
           </div>
         )}
 
-        {/* Audio Meter */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>Meter</span>
-            <span>{Math.round(meterLevel * 100)}%</span>
-          </div>
-          <div className="h-2 rounded bg-muted overflow-hidden">
-            <div
-              className="h-full bg-emerald-500 transition-[width] duration-75"
-              style={{ width: `${Math.min(100, Math.round(meterLevel * 100))}%` }}
-            />
-          </div>
-        </div>
-
         {/* Gain Control */}
         <div className="flex items-center gap-3">
           <button
@@ -1512,7 +1541,32 @@ function AudioPlayerInner({
               </span>
             </>
           )}
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={showMeter}
+              onChange={(e) => setShowMeter(e.target.checked)}
+              disabled={isViewOnly}
+              className="h-3 w-3 accent-foreground"
+            />
+            Meter
+          </label>
         </div>
+
+        {showMeter && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>Meter</span>
+              <span>{Math.round(meterLevel * 100)}%</span>
+            </div>
+            <div className="h-2 rounded bg-muted overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 transition-[width] duration-75"
+                style={{ width: `${Math.min(100, Math.round(meterLevel * 100))}%` }}
+              />
+            </div>
+          </div>
+        )}
         </div>
       )}
 

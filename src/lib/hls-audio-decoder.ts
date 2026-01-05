@@ -5,6 +5,7 @@ type Segment = {
   url: string;
   duration: number;
   start: number;
+  sequence?: number;
 };
 
 type LoadResult = {
@@ -21,6 +22,10 @@ type DecoderCallbacks = {
 };
 
 const BUFFER_AHEAD_SECONDS = 20;
+const MAX_BUFFERED_SECONDS = 60;
+const MAX_SEGMENT_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 300;
+const FAILURE_RESET_THRESHOLD = 5;
 const START_DELAY_SECONDS = 0.12;
 
 function resolveUrl(base: string, relative: string): string {
@@ -40,6 +45,8 @@ function parsePlaylist(text: string, baseUrl: string): {
   playlists: string[];
   segments: Segment[];
   isLive: boolean;
+  mediaSequence: number;
+  targetDuration: number;
 } {
   const parser = new Parser();
   parser.push(text);
@@ -48,6 +55,8 @@ function parsePlaylist(text: string, baseUrl: string): {
     playlists?: Array<{ uri: string }>;
     segments?: Array<{ duration: number; uri: string }>;
     endList?: boolean;
+    mediaSequence?: number;
+    targetDuration?: number;
   };
 
   const playlists = ((manifest.playlists ?? []) as Array<{ uri: string }>).map((playlist) =>
@@ -55,6 +64,7 @@ function parsePlaylist(text: string, baseUrl: string): {
   );
   const segments: Segment[] = [];
   let cursor = 0;
+  const mediaSequence = typeof manifest.mediaSequence === "number" ? manifest.mediaSequence : 0;
   for (const segment of manifest.segments ?? []) {
     const duration = typeof segment.duration === "number" ? segment.duration : 0;
     const url = resolveUrl(baseUrl, segment.uri);
@@ -62,15 +72,19 @@ function parsePlaylist(text: string, baseUrl: string): {
       url,
       duration,
       start: cursor,
+      sequence: mediaSequence + segments.length,
     });
     cursor += duration;
   }
 
+  const isLive = manifest.endList !== true;
   return {
     isMaster: playlists.length > 0,
     playlists,
     segments,
-    isLive: manifest.endList === false,
+    isLive,
+    mediaSequence,
+    targetDuration: typeof manifest.targetDuration === "number" ? manifest.targetDuration : 6,
   };
 }
 
@@ -82,6 +96,7 @@ export class HlsAudioDecoder {
   private segments: Segment[] = [];
   private duration = 0;
   private isLive = false;
+  private mode: "vod" | "live" = "vod";
   private isLoaded = false;
   private isPlaying = false;
   private startCtxTime = 0;
@@ -91,6 +106,12 @@ export class HlsAudioDecoder {
   private nextSegmentIndex = 0;
   private startSegmentIndex = 0;
   private scheduleToken = 0;
+  private playlistUrl: string | null = null;
+  private targetDuration = 6;
+  private liveQueue: Segment[] = [];
+  private pollTimer: number | null = null;
+  private lastSequenceSeen: number | null = null;
+  private consecutiveFailures = 0;
   private sources: AudioBufferSourceNode[] = [];
   private timeRaf: number | null = null;
   private scheduling = false;
@@ -117,18 +138,27 @@ export class HlsAudioDecoder {
       const mediaParsed = parsePlaylist(mediaText, mediaUrl);
       this.segments = mediaParsed.segments;
       this.isLive = mediaParsed.isLive;
+      this.playlistUrl = mediaUrl;
+      this.targetDuration = mediaParsed.targetDuration;
     } else {
       this.segments = parsed.segments;
       this.isLive = parsed.isLive;
+      this.playlistUrl = this.url;
+      this.targetDuration = parsed.targetDuration;
     }
 
     if (this.segments.length === 0) {
       throw new Error("HLS playlist has no audio segments.");
     }
 
-    this.duration = this.segments.reduce((sum, segment) => sum + segment.duration, 0);
+    this.mode = this.isLive ? "live" : "vod";
+    this.duration = this.isLive ? 0 : this.segments.reduce((sum, segment) => sum + segment.duration, 0);
     this.isLoaded = true;
     this.callbacks.onDuration(this.duration, this.isLive);
+
+    if (this.isLive) {
+      await this.refreshLivePlaylist(true);
+    }
     return { duration: this.duration, isLive: this.isLive };
   }
 
@@ -140,7 +170,11 @@ export class HlsAudioDecoder {
     if (!this.isLoaded || this.isPlaying) return;
     this.isPlaying = true;
     this.callbacks.onState(true);
-    this.startScheduling(this.currentTime);
+    if (this.mode === "live") {
+      this.startLivePlayback();
+    } else {
+      this.startScheduling(this.currentTime);
+    }
     this.startClock();
   }
 
@@ -150,12 +184,16 @@ export class HlsAudioDecoder {
     this.isPlaying = false;
     this.callbacks.onState(false);
     this.scheduleToken += 1;
+    this.stopLivePolling();
     this.stopSources();
     this.stopClock();
   }
 
   seek(time: number): void {
     if (!this.isLoaded) return;
+    if (this.mode === "live") {
+      return;
+    }
     const nextTime = Math.max(0, Math.min(this.duration, time));
     this.currentTime = nextTime;
     if (!this.isPlaying) {
@@ -168,10 +206,19 @@ export class HlsAudioDecoder {
     this.startScheduling(this.currentTime);
   }
 
+  jumpToLiveEdge(): void {
+    if (this.mode !== "live") return;
+    this.scheduleToken += 1;
+    this.stopSources();
+    this.scheduling = false;
+    this.startLivePlayback();
+  }
+
   stop(): void {
     this.isPlaying = false;
     this.stopped = true;
     this.scheduleToken += 1;
+    this.stopLivePolling();
     this.stopSources();
     this.stopClock();
   }
@@ -187,6 +234,17 @@ export class HlsAudioDecoder {
     this.startCtxTime = this.ctx.currentTime + START_DELAY_SECONDS;
     this.scheduleCursor = this.startCtxTime;
     void this.scheduleLoop(this.scheduleToken, startTime - this.segments[index].start);
+  }
+
+  private startLivePlayback(): void {
+    if (this.scheduling || this.stopped) return;
+    this.scheduleToken += 1;
+    this.startMediaTime = 0;
+    this.currentTime = 0;
+    this.startCtxTime = this.ctx.currentTime + START_DELAY_SECONDS;
+    this.scheduleCursor = this.startCtxTime;
+    this.startLivePolling();
+    void this.scheduleLiveLoop(this.scheduleToken);
   }
 
   private async scheduleLoop(token: number, initialOffset: number): Promise<void> {
@@ -207,18 +265,36 @@ export class HlsAudioDecoder {
         const segment = this.segments[this.nextSegmentIndex];
         let buffer: AudioBuffer;
         try {
-      buffer = await this.decodeSegment(segment.url);
-    } catch (err) {
-      this.callbacks.onError(`Failed to decode segment: ${segment.url} (${(err as Error).message})`);
-      this.pause();
-      break;
-    }
+          buffer = await this.decodeSegmentWithRetry(segment.url, token);
+        } catch (err) {
+          this.callbacks.onError(`Failed to decode segment: ${segment.url} (${(err as Error).message})`);
+          this.consecutiveFailures += 1;
+          if (this.consecutiveFailures >= FAILURE_RESET_THRESHOLD) {
+            await this.resetVodWindow();
+            break;
+          }
+          this.pause();
+          break;
+        }
 
+        this.consecutiveFailures = 0;
         if (!this.isPlaying || token !== this.scheduleToken) break;
 
         const source = this.ctx.createBufferSource();
         source.buffer = buffer;
         source.connect(this.outputNode);
+        const cleanup = () => {
+          const index = this.sources.indexOf(source);
+          if (index >= 0) {
+            this.sources.splice(index, 1);
+          }
+          source.onended = null;
+          try {
+            source.disconnect();
+          } catch {
+            // ignore
+          }
+        };
 
         const segmentOffset = this.nextSegmentIndex === this.startSegmentIndex ? offset : 0;
         const playDuration = Math.max(0, buffer.duration - segmentOffset);
@@ -228,6 +304,20 @@ export class HlsAudioDecoder {
         }
 
         const startTime = Math.max(this.scheduleCursor, this.ctx.currentTime + 0.02);
+        if (this.nextSegmentIndex === this.segments.length - 1) {
+          source.onended = () => {
+            if (token !== this.scheduleToken) return;
+            cleanup();
+            if (!this.isPlaying) return;
+            this.isPlaying = false;
+            this.callbacks.onState(false);
+            this.callbacks.onEnded();
+          };
+        } else {
+          source.onended = () => {
+            cleanup();
+          };
+        }
         source.start(startTime, segmentOffset);
         this.sources.push(source);
         this.scheduleCursor = startTime + playDuration;
@@ -235,17 +325,229 @@ export class HlsAudioDecoder {
         offset = 0;
       }
 
-      if (this.nextSegmentIndex >= this.segments.length && this.isPlaying && token === this.scheduleToken) {
-        const remaining = Math.max(0, this.duration - this.computeCurrentTime());
-        if (remaining < 0.1) {
-          this.isPlaying = false;
-          this.callbacks.onState(false);
-          this.callbacks.onEnded();
+      // End-of-playback is handled by the onended handler for the final source.
+    } finally {
+      this.scheduling = false;
+    }
+  }
+
+  private async scheduleLiveLoop(token: number): Promise<void> {
+    if (this.scheduling) return;
+    this.scheduling = true;
+
+    try {
+      while (this.isPlaying && !this.stopped) {
+        if (token !== this.scheduleToken) {
+          break;
         }
+        if (this.scheduleCursor - this.ctx.currentTime > BUFFER_AHEAD_SECONDS) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          continue;
+        }
+        const segment = this.liveQueue.shift();
+        if (!segment) {
+          if (this.scheduleCursor + this.targetDuration < this.ctx.currentTime) {
+            await this.resetLiveWindow();
+          }
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          continue;
+        }
+
+        let buffer: AudioBuffer;
+        try {
+          buffer = await this.decodeSegmentWithRetry(segment.url, token);
+        } catch (err) {
+          this.callbacks.onError(`Failed to decode segment: ${segment.url} (${(err as Error).message})`);
+          this.consecutiveFailures += 1;
+          if (this.consecutiveFailures >= FAILURE_RESET_THRESHOLD) {
+            await this.resetLiveWindow();
+            break;
+          }
+          this.pause();
+          break;
+        }
+
+        this.consecutiveFailures = 0;
+        if (!this.isPlaying || token !== this.scheduleToken) break;
+
+        const source = this.ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.outputNode);
+        source.onended = () => {
+          const index = this.sources.indexOf(source);
+          if (index >= 0) {
+            this.sources.splice(index, 1);
+          }
+          source.onended = null;
+          try {
+            source.disconnect();
+          } catch {
+            // ignore
+          }
+        };
+
+        const startTime = Math.max(this.scheduleCursor, this.ctx.currentTime + 0.02);
+        source.start(startTime);
+        this.sources.push(source);
+        this.scheduleCursor = startTime + buffer.duration;
       }
     } finally {
       this.scheduling = false;
     }
+  }
+
+  private startLivePolling(): void {
+    if (!this.playlistUrl) return;
+    if (this.pollTimer !== null) return;
+    const intervalMs = Math.max(2000, Math.floor(this.targetDuration * 500));
+    this.pollTimer = window.setInterval(() => {
+      void this.refreshLivePlaylist(false);
+    }, intervalMs);
+  }
+
+  private stopLivePolling(): void {
+    if (this.pollTimer !== null) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+  }
+
+  private async refreshLivePlaylist(initial: boolean): Promise<void> {
+    if (!this.playlistUrl) return;
+    let text: string;
+    try {
+      text = await fetchText(this.playlistUrl);
+    } catch (err) {
+      if (initial) {
+        throw err;
+      }
+      return;
+    }
+    const parsed = parsePlaylist(text, this.playlistUrl);
+    if (!parsed.isLive) {
+      this.isLive = false;
+      this.mode = "vod";
+      return;
+    }
+
+    const segments = parsed.segments;
+    if (segments.length === 0) return;
+
+    const lastSegment = segments[segments.length - 1];
+    const lastSequence = typeof lastSegment.sequence === "number" ? lastSegment.sequence : null;
+
+    if (initial || this.lastSequenceSeen === null) {
+      this.liveQueue = this.trimLiveQueue(segments);
+      this.lastSequenceSeen = lastSequence;
+      return;
+    }
+
+    const newSegments = segments.filter((seg) => {
+      if (typeof seg.sequence !== "number") return false;
+      return this.lastSequenceSeen === null || seg.sequence > this.lastSequenceSeen;
+    });
+    if (newSegments.length > 0) {
+      const firstNew = newSegments[0];
+      if (typeof firstNew.sequence === "number" && this.lastSequenceSeen !== null) {
+        if (firstNew.sequence > this.lastSequenceSeen + 1) {
+          await this.resetLiveWindow();
+          return;
+        }
+      }
+      this.liveQueue.push(...newSegments);
+      this.liveQueue = this.trimLiveQueue(this.liveQueue);
+      this.lastSequenceSeen = lastSequence;
+    }
+  }
+
+  private trimLiveQueue(segments: Segment[]): Segment[] {
+    let total = 0;
+    const trimmed: Segment[] = [];
+    for (let i = segments.length - 1; i >= 0; i -= 1) {
+      const segment = segments[i];
+      const duration = Math.max(0, segment.duration);
+      if (total + duration > MAX_BUFFERED_SECONDS && trimmed.length > 0) {
+        break;
+      }
+      trimmed.push(segment);
+      total += duration;
+    }
+    return trimmed.reverse();
+  }
+
+  private async resetLiveWindow(): Promise<void> {
+    this.scheduleToken += 1;
+    this.stopSources();
+    this.scheduling = false;
+    this.liveQueue = [];
+    this.lastSequenceSeen = null;
+    this.startCtxTime = this.ctx.currentTime + START_DELAY_SECONDS;
+    this.scheduleCursor = this.startCtxTime;
+    await this.refreshLivePlaylist(true);
+    this.scheduleToken += 1;
+    void this.scheduleLiveLoop(this.scheduleToken);
+  }
+
+  private async resetVodWindow(): Promise<void> {
+    if (!this.isPlaying || this.mode !== "vod") return;
+    const freshCurrentTime =
+      this.startCtxTime > 0
+        ? this.startMediaTime + (this.ctx.currentTime - this.startCtxTime)
+        : this.currentTime;
+    this.currentTime = freshCurrentTime;
+    const nextToken = this.scheduleToken + 1;
+    this.scheduleToken = nextToken;
+    this.stopSources();
+    this.scheduling = false;
+    this.startCtxTime = this.ctx.currentTime + START_DELAY_SECONDS;
+    this.scheduleCursor = this.startCtxTime;
+    this.startScheduling(freshCurrentTime);
+  }
+
+  private async decodeSegmentWithRetry(url: string, token: number): Promise<AudioBuffer> {
+    let attempt = 0;
+    let lastError: Error | null = null;
+    while (attempt < MAX_SEGMENT_RETRIES) {
+      if (token !== this.scheduleToken) {
+        throw new Error("Segment decode cancelled");
+      }
+      try {
+        return await this.decodeSegment(url);
+      } catch (err) {
+        lastError = err as Error;
+        attempt += 1;
+        if (attempt >= MAX_SEGMENT_RETRIES) break;
+        const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        const controller = new AbortController();
+        const { signal } = controller;
+        const timeoutId = window.setTimeout(() => controller.abort(), delay);
+        const cancelCheckId = window.setInterval(() => {
+          if (token !== this.scheduleToken) {
+            controller.abort();
+          }
+        }, 25);
+        try {
+          await new Promise<void>((resolve, reject) => {
+            if (signal.aborted) {
+              reject(new Error("Segment decode cancelled"));
+              return;
+            }
+            const onAbort = () => {
+              if (token !== this.scheduleToken) {
+                reject(new Error("Segment decode cancelled"));
+                return;
+              }
+              resolve();
+            };
+            signal.addEventListener("abort", onAbort, { once: true });
+          });
+        } finally {
+          clearTimeout(timeoutId);
+          clearInterval(cancelCheckId);
+        }
+      }
+    }
+    throw lastError ?? new Error("Segment decode failed");
   }
 
   private findSegmentIndex(time: number): number {
@@ -311,14 +613,16 @@ export class HlsAudioDecoder {
 
     const mux = muxjs as { mp4: { Transmuxer: new (opts: { keepOriginalTimestamps: boolean }) => {
       on: (event: string, handler: (data: unknown) => void) => void;
+      off?: (event: string, handler: (data: unknown) => void) => void;
       push: (data: Uint8Array) => void;
       flush: () => void;
     } } };
     const transmuxer = new mux.mp4.Transmuxer({ keepOriginalTimestamps: true });
     const segments: Uint8Array[] = [];
     let initSegment: Uint8Array | null = null;
+    let transmuxErrorMessage: string | null = null;
 
-    transmuxer.on("data", (segment) => {
+    const handleData = (segment: unknown) => {
       const payload = segment as { initSegment?: Uint8Array; data?: Uint8Array };
       if (!payload.initSegment || !payload.data) {
         return;
@@ -327,13 +631,25 @@ export class HlsAudioDecoder {
         initSegment = payload.initSegment;
       }
       segments.push(payload.data);
-    });
-    transmuxer.on("error", (err: unknown) => {
-      throw new Error(`Transmuxer error: ${(err as Error).message}`);
-    });
+    };
+    const handleError = (err: unknown) => {
+      transmuxErrorMessage = err instanceof Error ? err.message : String(err);
+    };
+
+    transmuxer.on("data", handleData);
+    transmuxer.on("error", handleError);
 
     transmuxer.push(data);
     transmuxer.flush();
+
+    if (transmuxer.off) {
+      transmuxer.off("data", handleData);
+      transmuxer.off("error", handleError);
+    }
+
+    if (transmuxErrorMessage !== null) {
+      throw new Error(`Transmuxer error: ${transmuxErrorMessage}`);
+    }
 
     if (!initSegment || segments.length === 0) {
       throw new Error("Transmuxer produced no audio data.");
