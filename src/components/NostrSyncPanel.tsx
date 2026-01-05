@@ -491,7 +491,7 @@ export function NostrSyncPanel({
       {renderContent()}
 
       <div
-        className={cn("text-xs p-2 rounded-md transition-colors",
+        className={cn("text-xs p-2 rounded-md transition-colors min-h-[2.5rem]",
           !displayMessage && "invisible",
           displayMessage && "bg-muted/50",
           status === "error" && "text-destructive bg-destructive/5 border border-destructive/10",
@@ -502,11 +502,9 @@ export function NostrSyncPanel({
         )}
       >
         {displayMessage}
-        {showTimestamp && (
-          <span className="block mt-1 opacity-75 text-[10px]">
-            {lastOperation.type === "saved" ? "Saved" : "Loaded"} at {lastOperation.timestamp}
-          </span>
-        )}
+        <span className={cn("block mt-1 opacity-75 text-[10px]", !showTimestamp && "invisible")}>
+          {showTimestamp && lastOperation ? `${lastOperation.type === "saved" ? "Saved" : "Loaded"} at ${lastOperation.timestamp}` : "\u00A0"}
+        </span>
       </div>
 
       {/* Collapsible details panel */}

@@ -1035,13 +1035,11 @@ function AudioPlayerInner({
         <div className="text-sm text-red-700 bg-red-500/10 border border-red-500/20 p-3 rounded-md">
           Invalid npub format. Check URL or generate a new identity.
         </div>
-      ) : (
-        error && (
-          <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
-            {error}
-          </div>
-        )
-      )}
+      ) : error ? (
+        <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
+          {error}
+        </div>
+      ) : null}
 
       {/* Now Playing */}
       {nowPlayingUrl && (
