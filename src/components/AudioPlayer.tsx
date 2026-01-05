@@ -7,10 +7,10 @@ import { NostrSyncPanel } from "./NostrSyncPanel";
 import {
   MAX_HISTORY_ENTRIES,
   getHistory,
+  getHistoryTimestamp,
   saveHistory,
   type HistoryEntry,
 } from "@/lib/history";
-import { getHistoryTimestampStorageKey } from "@/lib/identity";
 import type { SessionStatus } from "@/hooks/useNostrSession";
 
 const SAVE_INTERVAL_MS = 5000;
@@ -825,12 +825,9 @@ function AudioPlayerInner({
         const pausedAt = pausedAtTimestampRef.current;
         if (pausedAt === null) return;
 
-        // Get the localStorage history timestamp (scoped by fingerprint)
-        const timestampKey = getHistoryTimestampStorageKey(fingerprintRef.current ?? "");
-        const storedTimestamp = localStorage.getItem(timestampKey);
-        if (!storedTimestamp) return;
-
-        const historyUpdatedAt = parseInt(storedTimestamp, 10);
+        // Get the history timestamp (atomic with history data)
+        const historyUpdatedAt = getHistoryTimestamp(fingerprintRef.current);
+        if (historyUpdatedAt === null) return;
 
         // If history was updated after we paused, reload it
         if (historyUpdatedAt > pausedAt) {

@@ -112,26 +112,11 @@ export function clearNsec(fingerprint: string): void {
 // History Storage (per npub fingerprint)
 // =============================================================================
 
-function getHistoryKey(fingerprint: string): string {
-  return `${STORAGE_PREFIX}.history.v1.${fingerprint}`;
-}
-
-function getHistoryTimestampKey(fingerprint: string): string {
-  return `${STORAGE_PREFIX}.history.timestamp.${fingerprint}`;
-}
-
 /**
  * Get history storage key for a given fingerprint
  */
 export function getHistoryStorageKey(fingerprint: string): string {
-  return getHistoryKey(fingerprint);
-}
-
-/**
- * Get history timestamp key for a given fingerprint
- */
-export function getHistoryTimestampStorageKey(fingerprint: string): string {
-  return getHistoryTimestampKey(fingerprint);
+  return `${STORAGE_PREFIX}.history.v1.${fingerprint}`;
 }
 
 // =============================================================================
@@ -145,6 +130,5 @@ export function clearAllIdentityData(fingerprint: string): void {
   if (typeof window === "undefined") return;
   clearSecondarySecret(fingerprint);
   clearNsec(fingerprint);
-  localStorage.removeItem(getHistoryKey(fingerprint));
-  localStorage.removeItem(getHistoryTimestampKey(fingerprint));
+  localStorage.removeItem(getHistoryStorageKey(fingerprint));
 }

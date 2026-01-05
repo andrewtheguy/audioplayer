@@ -1,7 +1,4 @@
-import {
-  getHistoryStorageKey,
-  getHistoryTimestampStorageKey,
-} from "./identity";
+import { getHistoryStorageKey } from "./identity";
 
 export const MAX_HISTORY_ENTRIES = 100;
 
@@ -66,35 +63,89 @@ function trimHistory(history: HistoryEntry[]): HistoryEntry[] {
   return history.slice(0, MAX_HISTORY_ENTRIES);
 }
 
-export function getHistory(fingerprint: string | undefined): HistoryEntry[] {
-  if (!fingerprint) return [];
+/**
+ * Validate that a value is a valid HistoryPayload
+ */
+function isValidHistoryPayload(value: unknown): value is HistoryPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const payload = value as Record<string, unknown>;
+  return Array.isArray(payload.history) && typeof payload.timestamp === "number";
+}
+
+/**
+ * Get history payload from localStorage (atomic: history + timestamp together)
+ * Returns null if no history exists or on parse error
+ */
+function getHistoryPayload(fingerprint: string | undefined): HistoryPayload | null {
+  if (!fingerprint) return null;
   try {
     const key = getHistoryStorageKey(fingerprint);
     const data = localStorage.getItem(key);
-    if (!data) return [];
+    if (!data) return null;
 
-    const parsed = JSON.parse(data);
-    const validated = validateHistoryArray(parsed);
+    const parsed: unknown = JSON.parse(data);
 
-    // Ensure we never return more than MAX_HISTORY_ENTRIES
-    return trimHistory(validated);
+    // Handle new format (HistoryPayload object)
+    if (isValidHistoryPayload(parsed)) {
+      const validated = validateHistoryArray(parsed.history);
+      return {
+        history: trimHistory(validated),
+        timestamp: parsed.timestamp,
+        sessionId: typeof parsed.sessionId === "string" ? parsed.sessionId : undefined,
+      };
+    }
+
+    // Handle legacy format (plain array) - migrate on read
+    if (Array.isArray(parsed)) {
+      const validated = validateHistoryArray(parsed);
+      return {
+        history: trimHistory(validated),
+        timestamp: Date.now(),
+      };
+    }
+
+    console.warn("Unknown history format in localStorage");
+    return null;
   } catch (err) {
     console.warn("Failed to parse history from localStorage:", err);
-    return [];
+    return null;
   }
 }
 
-export function saveHistory(history: HistoryEntry[], fingerprint: string | undefined): void {
+/**
+ * Get history entries from localStorage
+ */
+export function getHistory(fingerprint: string | undefined): HistoryEntry[] {
+  return getHistoryPayload(fingerprint)?.history ?? [];
+}
+
+/**
+ * Get the timestamp when history was last saved
+ * Returns null if no history exists
+ */
+export function getHistoryTimestamp(fingerprint: string | undefined): number | null {
+  return getHistoryPayload(fingerprint)?.timestamp ?? null;
+}
+
+/**
+ * Save history payload to localStorage (atomic: history + timestamp together)
+ */
+export function saveHistory(
+  history: HistoryEntry[],
+  fingerprint: string | undefined,
+  sessionId?: string
+): void {
   if (!fingerprint) return;
   try {
-    const historyKey = getHistoryStorageKey(fingerprint);
-    const timestampKey = getHistoryTimestampStorageKey(fingerprint);
-    // Trim to MAX_HISTORY_ENTRIES before saving (keeps most recent)
+    const key = getHistoryStorageKey(fingerprint);
     const trimmed = trimHistory(history);
-    localStorage.setItem(historyKey, JSON.stringify(trimmed));
-    localStorage.setItem(timestampKey, Date.now().toString());
+    const payload: HistoryPayload = {
+      history: trimmed,
+      timestamp: Date.now(),
+      sessionId,
+    };
+    localStorage.setItem(key, JSON.stringify(payload));
   } catch (err) {
-    // Storage full or unavailable
     console.warn("Failed to save history to localStorage:", err);
   }
 }
