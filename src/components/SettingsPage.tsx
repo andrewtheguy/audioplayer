@@ -8,7 +8,7 @@ import {
   generatePlayerId,
   generateSecondarySecret,
 } from "@/lib/nostr-crypto";
-import { clearSecondarySecret, getStorageScope } from "@/lib/identity";
+import { clearSecondarySecret, getStorageScope, getSecondarySecret, setSecondarySecret } from "@/lib/identity";
 import { publishPlayerIdToNostr } from "@/lib/nostr-sync";
 import { navigate } from "@/lib/navigation";
 
@@ -50,7 +50,13 @@ export function SettingsPage() {
 
     // Validate and decode nsec
     const trimmedNsec = nsecInput.trim();
-    const privateKeyBytes = decodeNsec(trimmedNsec);
+    let privateKeyBytes: Uint8Array | null;
+    try {
+      privateKeyBytes = decodeNsec(trimmedNsec);
+    } catch {
+      setMessage("Invalid nsec format.");
+      return;
+    }
     if (!privateKeyBytes) {
       setMessage("Invalid nsec format.");
       return;
@@ -80,8 +86,29 @@ export function SettingsPage() {
     }
 
     // Clear the old secondary secret from this device
-    const fingerprint = await getStorageScope(pubkeyHex);
-    clearSecondarySecret(fingerprint);
+    try {
+      const fingerprint = await getStorageScope(pubkeyHex);
+      if (fingerprint) {
+        // Save current secret for potential rollback
+        const savedSecret = getSecondarySecret(fingerprint);
+        try {
+          clearSecondarySecret(fingerprint);
+        } catch (clearErr) {
+          // Attempt rollback if clearing failed
+          if (savedSecret) {
+            try {
+              setSecondarySecret(fingerprint, savedSecret);
+            } catch (rollbackErr) {
+              console.error("Failed to rollback secret:", rollbackErr);
+            }
+          }
+          console.error("Failed to clear old secret:", clearErr);
+        }
+      }
+    } catch (err) {
+      // Log but don't fail - the new credentials are already published
+      console.error("Failed to get storage scope:", err);
+    }
 
     setStatus("success");
     setNewSecondarySecret(newSecret);
