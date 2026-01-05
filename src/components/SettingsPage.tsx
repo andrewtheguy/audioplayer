@@ -8,7 +8,7 @@ import {
   generatePlayerId,
   generateSecondarySecret,
 } from "@/lib/nostr-crypto";
-import { clearSecondarySecret, getStorageScope, getSecondarySecret, setSecondarySecret } from "@/lib/identity";
+import { clearSecondarySecret, getStorageScope } from "@/lib/identity";
 import { publishPlayerIdToNostr } from "@/lib/nostr-sync";
 import { navigate } from "@/lib/navigation";
 
@@ -86,33 +86,33 @@ export function SettingsPage() {
     }
 
     // Clear the old secondary secret from this device
+    // Note: New credentials are already published - rotation is complete regardless of local cleanup
+    let cleanupFailed = false;
     try {
       const fingerprint = await getStorageScope(pubkeyHex);
       if (fingerprint) {
-        // Save current secret for potential rollback
-        const savedSecret = getSecondarySecret(fingerprint);
         try {
           clearSecondarySecret(fingerprint);
         } catch (clearErr) {
-          // Attempt rollback if clearing failed
-          if (savedSecret) {
-            try {
-              setSecondarySecret(fingerprint, savedSecret);
-            } catch (rollbackErr) {
-              console.error("Failed to rollback secret:", rollbackErr);
-            }
-          }
           console.error("Failed to clear old secret:", clearErr);
+          cleanupFailed = true;
         }
       }
     } catch (err) {
-      // Log but don't fail - the new credentials are already published
       console.error("Failed to get storage scope:", err);
+      cleanupFailed = true;
     }
 
     setStatus("success");
     setNewSecondarySecret(newSecret);
-    setMessage(`Rotation complete for ${npub.slice(0, 12)}...`);
+    if (cleanupFailed) {
+      setMessage(
+        `Rotation complete for ${npub.slice(0, 12)}... but failed to clear old secret from this device. ` +
+        `Consider clearing browser storage manually to remove old credentials.`
+      );
+    } else {
+      setMessage(`Rotation complete for ${npub.slice(0, 12)}...`);
+    }
     setNsecInput("");
     setDerivedNpub(null);
   };

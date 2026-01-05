@@ -149,6 +149,10 @@ export function useNostrSession({
     if (initializingRef.current) return;
     initializingRef.current = true;
 
+    // Reset player state at start of initialization (atomic with re-init)
+    setPlayerId(null);
+    setEncryptionKeys(null);
+
     try {
       // 1. Parse npub from URL path
       const currentNpub = getNpubFromPath();
@@ -156,8 +160,6 @@ export function useNostrSession({
         setNpub(null);
         setPubkeyHex(null);
         setFingerprint(null);
-        setPlayerId(null);
-        setEncryptionKeys(null);
         setSecondarySecretState(null);
         setSessionStatus("no_npub");
         return;
@@ -194,8 +196,8 @@ export function useNostrSession({
       try {
         const remotePlayerId = await loadPlayerIdFromNostr(hex, cachedSecret);
         if (remotePlayerId && isValidPlayerId(remotePlayerId)) {
-          setPlayerId(remotePlayerId);
           const keys = await deriveEncryptionKey(remotePlayerId);
+          setPlayerId(remotePlayerId);
           setEncryptionKeys(keys);
           setSessionStatus("idle");
           return;
@@ -238,9 +240,6 @@ export function useNostrSession({
     if (typeof window === "undefined") return;
 
     const handleRouteChange = () => {
-      // Reset state and re-initialize
-      setPlayerId(null);
-      setEncryptionKeys(null);
       initializeSession();
     };
 
@@ -274,8 +273,8 @@ export function useNostrSession({
           // Player ID changed - this means rotation happened with same secret
           // (unusual, but handle it)
           console.warn("Player ID changed on relay, re-initializing");
-          setPlayerId(remotePlayerId);
           const keys = await deriveEncryptionKey(remotePlayerId);
+          setPlayerId(remotePlayerId);
           setEncryptionKeys(keys);
         }
       } catch (err) {
@@ -336,10 +335,11 @@ export function useNostrSession({
       try {
         const remotePlayerId = await loadPlayerIdFromNostr(pubkeyHex, secret);
         if (remotePlayerId && isValidPlayerId(remotePlayerId)) {
-          // Success - now persist to localStorage
+          // Derive keys first to ensure consistent state
+          const keys = await deriveEncryptionKey(remotePlayerId);
+          // Success - now persist to localStorage and set state
           setSecondarySecret(fingerprint, secret);
           setPlayerId(remotePlayerId);
-          const keys = await deriveEncryptionKey(remotePlayerId);
           setEncryptionKeys(keys);
           setSessionStatus("idle");
           setSessionNotice(null);
@@ -442,10 +442,9 @@ export function useNostrSession({
       setPubkeyHex(derivedPubkey);
       setFingerprint(fp);
 
-      // Set player id and derive encryption keys
-      setPlayerId(newPlayerId);
-
+      // Derive encryption keys first, then set state atomically
       const keys = await deriveEncryptionKey(newPlayerId);
+      setPlayerId(newPlayerId);
       setEncryptionKeys(keys);
 
       setSessionStatus("idle");
@@ -498,11 +497,9 @@ export function useNostrSession({
         return false;
       }
 
-      // Set new player id
-      setPlayerId(newPlayerId);
-
-      // Derive new encryption keys
+      // Derive encryption keys first, then set state atomically
       const keys = await deriveEncryptionKey(newPlayerId);
+      setPlayerId(newPlayerId);
       setEncryptionKeys(keys);
 
       setSessionStatus("idle");
