@@ -18,9 +18,9 @@ import {
   storeNsec,
 } from "@/lib/identity";
 import {
-  checkPlayerIdEventExists,
   loadPlayerIdFromNostr,
   publishPlayerIdToNostr,
+  PlayerIdDecryptionError,
 } from "@/lib/nostr-sync";
 
 export type SessionStatus =
@@ -197,25 +197,29 @@ export function useNostrSession({
           setSessionStatus("idle");
           return;
         }
+        // No player id event exists - needs setup with nsec
+        setSessionStatus("needs_setup");
+        return;
       } catch (err) {
+        if (err instanceof PlayerIdDecryptionError) {
+          // Decryption failed - wrong secondary secret
+          console.warn("Failed to decrypt player id:", err.message);
+          setSessionStatus("needs_secret");
+          setSessionNotice("Wrong secondary secret. Please re-enter.");
+          // Clear the invalid secret from both React state and localStorage
+          setSecondarySecretState(null);
+          clearSecondarySecret(fp);
+          return;
+        }
+        // Network or other error - preserve the secret and show error
         console.warn("Failed to load player id from relay:", err);
-        // Continue to check if event exists
-      }
-
-      // 6. Check if player id event exists (but we couldn't decrypt)
-      const eventExists = await checkPlayerIdEventExists(hex);
-      if (eventExists) {
-        // Event exists but decrypt failed - wrong secondary secret
         setSessionStatus("needs_secret");
-        setSessionNotice("Wrong secondary secret. Please re-enter.");
-        // Clear the invalid secret from both React state and localStorage
-        setSecondarySecretState(null);
-        clearSecondarySecret(fp);
+        setSessionNotice(
+          `Network error: ${err instanceof Error ? err.message : "Failed to connect to relay"}. Please try again.`
+        );
+        // Don't clear the secret - it might be valid, just network issues
         return;
       }
-
-      // 7. No player id event exists - needs setup with nsec
-      setSessionStatus("needs_setup");
     } finally {
       initializingRef.current = false;
     }
@@ -290,19 +294,26 @@ export function useNostrSession({
           setSessionNotice(null);
           return true;
         }
-      } catch {
-        // Decrypt failed - wrong secret, clear from both React state and localStorage
-        setSecondarySecretState(null);
-        clearSecondarySecret(fingerprint);
-        setSessionNotice("Failed to decrypt player ID. Wrong secret?");
+        // No player id exists - need to set up with nsec
+        setSessionStatus("needs_setup");
+        setSessionNotice(null);
+        return true;
+      } catch (err) {
+        if (err instanceof PlayerIdDecryptionError) {
+          // Decrypt failed - wrong secret, clear from both React state and localStorage
+          setSecondarySecretState(null);
+          clearSecondarySecret(fingerprint);
+          setSessionNotice("Failed to decrypt player ID. Wrong secret?");
+          setSessionStatus("needs_secret");
+          return false;
+        }
+        // Network or other error - preserve the secret and show error
+        setSessionNotice(
+          `Network error: ${err instanceof Error ? err.message : "Failed to connect to relay"}. Please try again.`
+        );
         setSessionStatus("needs_secret");
         return false;
       }
-
-      // No player id exists - need to set up with nsec
-      setSessionStatus("needs_setup");
-      setSessionNotice(null);
-      return true;
     },
     [pubkeyHex, fingerprint]
   );

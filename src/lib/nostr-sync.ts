@@ -15,6 +15,17 @@ export const RELAYS = [
   "wss://relay.snort.social",
 ];
 
+/**
+ * Custom error class for player ID decryption failures.
+ * Used to distinguish decryption errors (wrong secret) from network errors.
+ */
+export class PlayerIdDecryptionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PlayerIdDecryptionError";
+  }
+}
+
 const KIND_APP_DATA = 30078; // NIP-78: Application-specific replaceable data
 const D_TAG_PLAYER_ID = "audioplayer-playerid-v1";
 const D_TAG_HISTORY = "audioplayer-history-v1";
@@ -154,7 +165,7 @@ export async function loadPlayerIdFromNostr(
     );
     return playerId;
   } catch (err) {
-    throw new Error(
+    throw new PlayerIdDecryptionError(
       `Failed to decrypt player ID: ${err instanceof Error ? err.message : "Unknown error"}`
     );
   }
