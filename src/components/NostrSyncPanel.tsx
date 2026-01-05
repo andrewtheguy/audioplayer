@@ -42,7 +42,6 @@ export function NostrSyncPanel({
   const [nsecInput, setNsecInput] = useState("");
   const [npubInput, setNpubInput] = useState("");
   const [generatedIdentity, setGeneratedIdentity] = useState<{ npub: string; nsec: string; secondarySecret: string } | null>(null);
-  const [showRotateConfirm, setShowRotateConfirm] = useState(false);
   // Generation flow: show_credentials -> done
   const [generationStep, setGenerationStep] = useState<"show_credentials" | null>(null);
 
@@ -62,7 +61,6 @@ export function NostrSyncPanel({
     generateNewIdentity,
     submitSecondarySecret,
     setupWithNsec,
-    rotatePlayerId,
   } = useNostrSession({ sessionId, onSessionStatusChange });
 
   const { status, message, lastOperation, setMessage, performSave, performLoad, startSession } =
@@ -217,14 +215,6 @@ export function NostrSyncPanel({
       setNsecInput("");
       setSecondarySecretInput("");
       setGeneratedIdentity(null);
-    }
-  };
-
-  const handleRotatePlayerId = async () => {
-    const result = await rotatePlayerId(nsecInput.trim());
-    if (result) {
-      setNsecInput("");
-      setShowRotateConfirm(false);
     }
   };
 
@@ -626,55 +616,6 @@ export function NostrSyncPanel({
                     >
                       {status === "saving" ? "Saving..." : "Force Sync"}
                     </Button>
-
-                    {/* Rotate Player ID */}
-                    <div className="mt-3 pt-3 border-t border-border/50">
-                      {!showRotateConfirm ? (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setShowRotateConfirm(true)}
-                          className="w-full h-7 text-[10px] text-muted-foreground hover:text-amber-600"
-                        >
-                          Rotate Player ID
-                        </Button>
-                      ) : (
-                        <div className="space-y-2">
-                          <div className="text-[10px] text-amber-600">
-                            Warning: This will make your current history inaccessible.
-                          </div>
-                          <Input
-                            type="password"
-                            value={nsecInput}
-                            onChange={(e) => setNsecInput(e.target.value)}
-                            placeholder="Enter nsec to confirm"
-                            className="h-7 text-[10px] font-mono"
-                          />
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={handleRotatePlayerId}
-                              disabled={isLoading || !nsecInput.trim()}
-                              className="flex-1 h-7 text-[10px]"
-                            >
-                              Confirm Rotate
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => {
-                                setShowRotateConfirm(false);
-                                setNsecInput("");
-                              }}
-                              className="h-7 text-[10px]"
-                            >
-                              Cancel
-                            </Button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
                   </>
                 )}
               </div>
