@@ -19,7 +19,7 @@
     "hls.js": "^1.6.15",
     "lucide-react": "^0.555.0",
     "m3u8-parser": "^7.2.0",
-    "mux.js": "^6.3.0",
+    "mux.js": "^7.1.0",
     "nostr-tools": "^2.19.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
