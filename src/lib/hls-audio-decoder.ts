@@ -253,7 +253,7 @@ export class HlsAudioDecoder {
         if (token !== this.scheduleToken) {
           break;
         }
-        if (this.scheduleCursor - this.ctx.currentTime > Math.min(BUFFER_AHEAD_SECONDS, MAX_BUFFERED_SECONDS)) {
+        if (this.scheduleCursor - this.ctx.currentTime > BUFFER_AHEAD_SECONDS) {
           await new Promise((resolve) => setTimeout(resolve, 250));
           continue;
         }
@@ -332,7 +332,7 @@ export class HlsAudioDecoder {
         if (token !== this.scheduleToken) {
           break;
         }
-        if (this.scheduleCursor - this.ctx.currentTime > Math.min(BUFFER_AHEAD_SECONDS, MAX_BUFFERED_SECONDS)) {
+        if (this.scheduleCursor - this.ctx.currentTime > BUFFER_AHEAD_SECONDS) {
           await new Promise((resolve) => setTimeout(resolve, 250));
           continue;
         }
