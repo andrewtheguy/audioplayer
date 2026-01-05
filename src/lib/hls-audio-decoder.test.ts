@@ -86,8 +86,15 @@ vi.mock("mux.js", () => {
 });
 
 describe("HlsAudioDecoder", () => {
+  let originalFetch: typeof global.fetch;
+  let originalRAF: typeof global.requestAnimationFrame;
+  let originalCAF: typeof global.cancelAnimationFrame;
+
   beforeEach(() => {
     vi.useRealTimers();
+    originalFetch = global.fetch;
+    originalRAF = global.requestAnimationFrame;
+    originalCAF = global.cancelAnimationFrame;
     // @ts-expect-error test mock
     global.requestAnimationFrame = (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0);
     // @ts-expect-error test mock
@@ -95,6 +102,9 @@ describe("HlsAudioDecoder", () => {
   });
 
   afterEach(() => {
+    global.fetch = originalFetch;
+    global.requestAnimationFrame = originalRAF;
+    global.cancelAnimationFrame = originalCAF;
     vi.restoreAllMocks();
   });
 
