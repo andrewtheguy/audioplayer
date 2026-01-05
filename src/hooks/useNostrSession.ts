@@ -23,7 +23,6 @@ import {
   publishPlayerIdToNostr,
   PlayerIdDecryptionError,
 } from "@/lib/nostr-sync";
-import { navigate } from "@/lib/navigation";
 
 export type SessionStatus =
   | "no_npub" // No npub in URL
@@ -36,6 +35,8 @@ export type SessionStatus =
   | "invalid"; // Invalid npub format
 
 interface UseNostrSessionOptions {
+  npub: string | null; // From useParams()
+  onNavigate?: (path: string) => void; // For navigation
   sessionId?: string;
   onSessionStatusChange?: (status: SessionStatus) => void;
   takeoverGraceMs?: number;
@@ -74,18 +75,9 @@ interface UseNostrSessionResult {
 
 const DEFAULT_TAKEOVER_GRACE_MS = 15000;
 
-function getNpubFromPath(): string | null {
-  if (typeof window === "undefined") return null;
-  // Extract npub from pathname: /npub1... -> npub1...
-  const pathname = window.location.pathname;
-  const npub = pathname.startsWith("/") ? pathname.slice(1) : pathname;
-  if (!npub || !npub.startsWith("npub1")) {
-    return null;
-  }
-  return npub;
-}
-
 export function useNostrSession({
+  npub: npubParam,
+  onNavigate,
   sessionId,
   onSessionStatusChange,
   takeoverGraceMs = DEFAULT_TAKEOVER_GRACE_MS,
@@ -114,11 +106,16 @@ export function useNostrSession({
   const prevStatusRef = useRef<SessionStatus>(sessionStatus);
   const staleNoticeTimerRef = useRef<number | null>(null);
   const onSessionStatusChangeRef = useRef(onSessionStatusChange);
+  const onNavigateRef = useRef(onNavigate);
   const initializingRef = useRef(false);
 
   useEffect(() => {
     onSessionStatusChangeRef.current = onSessionStatusChange;
   }, [onSessionStatusChange]);
+
+  useEffect(() => {
+    onNavigateRef.current = onNavigate;
+  }, [onNavigate]);
 
   useEffect(() => {
     onSessionStatusChangeRef.current?.(sessionStatus);
@@ -144,8 +141,8 @@ export function useNostrSession({
     };
   }, [sessionStatus]);
 
-  // Initialize session on mount and path changes
-  const initializeSession = useCallback(async () => {
+  // Initialize session when npubParam changes
+  const initializeSession = useCallback(async (currentNpub: string | null) => {
     if (initializingRef.current) return;
     initializingRef.current = true;
 
@@ -153,8 +150,7 @@ export function useNostrSession({
     setPlayerState({ playerId: null, encryptionKeys: null });
 
     try {
-      // 1. Parse npub from URL path
-      const currentNpub = getNpubFromPath();
+      // 1. Check if npub is provided
       if (!currentNpub) {
         setNpub(null);
         setPubkeyHex(null);
@@ -228,26 +224,10 @@ export function useNostrSession({
     }
   }, []);
 
-  // Run initialization on mount
+  // Run initialization when npubParam changes (React Router handles re-renders)
   useEffect(() => {
-    initializeSession();
-  }, [initializeSession]);
-
-  // Listen for path changes (browser back/forward and programmatic navigation)
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const handleRouteChange = () => {
-      initializeSession();
-    };
-
-    window.addEventListener("popstate", handleRouteChange);
-    window.addEventListener("routechange", handleRouteChange);
-    return () => {
-      window.removeEventListener("popstate", handleRouteChange);
-      window.removeEventListener("routechange", handleRouteChange);
-    };
-  }, [initializeSession]);
+    initializeSession(npubParam);
+  }, [initializeSession, npubParam]);
 
   // Periodic revalidation of player ID (detect rotation by another device)
   useEffect(() => {
@@ -378,10 +358,9 @@ export function useNostrSession({
       const derivedPubkey = getPublicKey(privateKeyBytes);
       const derivedNpub = encodeNpub(derivedPubkey);
 
-      // Check if there's already an npub in URL - if so, verify it matches
-      const currentNpub = getNpubFromPath();
-      if (currentNpub) {
-        const currentPubkey = parseNpub(currentNpub);
+      // Check if there's already an npub - if so, verify it matches
+      if (npub) {
+        const currentPubkey = parseNpub(npub);
         if (currentPubkey && currentPubkey !== derivedPubkey) {
           setSessionNotice("nsec does not match this identity.");
           return false;
@@ -426,9 +405,9 @@ export function useNostrSession({
         return false;
       }
 
-      // Set URL to npub (after successful publish)
+      // Navigate to npub URL (after successful publish)
       if (typeof window !== "undefined" && window.location.pathname !== `/${derivedNpub}`) {
-        navigate(`/${derivedNpub}`);
+        onNavigateRef.current?.(`/${derivedNpub}`);
       }
 
       // Update React state
@@ -445,7 +424,7 @@ export function useNostrSession({
 
       return true;
     },
-    [fingerprint, secondarySecret]
+    [fingerprint, npub, secondarySecret]
   );
 
   // Rotate player id

@@ -293,15 +293,24 @@ export function useNostrSync({
   );
 
   const updateSessionStateAndMaybeSave = useCallback(
-    (
+    async (
       result: { merged: HistoryEntry[]; addedFromCloud: number },
       isTakeOver: boolean,
       remoteSid?: string,
       isStaleRemote?: boolean
     ) => {
       if (!isActive()) return;
+
+      const willSave = isTakeOver || !remoteSid || remoteSid === localSessionId;
+      const needsSave = willSave && (isTakeOver || !remoteSid);
+
+      // Only set dirtyRef = false immediately if we're not going to save
+      // If we're saving, let performSave handle clearing dirtyRef on success
+      if (!needsSave) {
+        dirtyRef.current = false;
+      }
+
       setStatus("success");
-      dirtyRef.current = false;
       if (!isStaleRemote) {
         setMessage(
           result.addedFromCloud > 0
@@ -310,11 +319,12 @@ export function useNostrSync({
         );
       }
 
-      if (isTakeOver || !remoteSid || remoteSid === localSessionId) {
+      if (willSave) {
         setSessionStatus("active");
         clearSessionNotice();
-        if (isTakeOver || !remoteSid) {
-          void performSave(result.merged, { allowStale: isTakeOver });
+        if (needsSave) {
+          await performSave(result.merged, { allowStale: isTakeOver });
+          // dirtyRef is cleared by performSave on success, remains true on failure for retry
         }
       }
     },
@@ -381,7 +391,7 @@ export function useNostrSync({
 
           const result = mergeAndNotify(cloudHistory, isTakeOver, followRemote);
           if (!isActive()) return;
-          updateSessionStateAndMaybeSave(
+          await updateSessionStateAndMaybeSave(
             result,
             isTakeOver,
             remoteSid ?? undefined,
@@ -389,16 +399,32 @@ export function useNostrSync({
           );
         } else {
           if (!isActive()) return;
-          if (!silent) {
-            setStatus("success");
-          }
           setSessionStatus("active");
           clearSessionNotice();
-          if (!silent) {
-            setMessage("Session started (new)");
+
+          // Sync local history to Nostr if we have any
+          const localHistory = historyRef.current;
+          if (localHistory.length > 0) {
+            if (!silent) {
+              setMessage(`Syncing ${localHistory.length} local entries...`);
+            }
+            const saved = await performSave(localHistory, { allowStale: true });
+            if (!isActive()) return;
+            if (saved) {
+              if (!silent) {
+                setStatus("success");
+                setMessage("Session started");
+              }
+              // dirtyRef is cleared by performSave on success
+            }
+            // If save failed, performSave already set error status and dirtyRef remains true for retry
+          } else {
+            if (!silent) {
+              setStatus("success");
+              setMessage("Session started (new)");
+            }
+            dirtyRef.current = false;
           }
-          dirtyRef.current = false;
-          void performSave(historyRef.current, { allowStale: true });
         }
       } catch (err) {
         if (!isActive()) return;
@@ -467,11 +493,26 @@ export function useNostrSync({
         onHistoryLoadedRef.current(result.merged);
         setStatus("success");
         setMessage(`Loaded ${cloudHistory.length} entries`);
+        dirtyRef.current = false;
       } else {
-        setStatus("success");
-        setMessage("No synced history found.");
+        // No remote history found - sync local history to Nostr if we have any
+        const localHistory = historyRef.current;
+        if (localHistory.length > 0) {
+          setMessage(`Syncing ${localHistory.length} local entries...`);
+          const saved = await performSave(localHistory, { allowStale: true });
+          if (!isActive()) return;
+          if (saved) {
+            setStatus("success");
+            setMessage(`Synced ${localHistory.length} local entries`);
+            // dirtyRef is cleared by performSave on success
+          }
+          // If save failed, performSave already set error status and dirtyRef remains true for retry
+        } else {
+          setStatus("success");
+          setMessage("No synced history found.");
+          dirtyRef.current = false;
+        }
       }
-      dirtyRef.current = false;
     } catch (err) {
       if (!isActive()) return;
       setStatus("error");
@@ -481,7 +522,7 @@ export function useNostrSync({
         setMessage(err instanceof Error ? err.message : "Failed to load");
       }
     }
-  }, [canSync, isActive, operationTimeoutMs]);
+  }, [canSync, isActive, operationTimeoutMs, performSave]);
 
   const startSession = useCallback(async () => {
     if (!canSync() || !isActive()) return;
