@@ -8,7 +8,7 @@ import {
   generatePlayerId,
   generateSecondarySecret,
 } from "@/lib/nostr-crypto";
-import { getStorageScope, setSecondarySecret } from "@/lib/identity";
+import { clearSecondarySecret, getStorageScope } from "@/lib/identity";
 import { publishPlayerIdToNostr } from "@/lib/nostr-sync";
 
 export function SettingsPage() {
@@ -79,9 +79,9 @@ export function SettingsPage() {
       return;
     }
 
-    // Store the new secondary secret
+    // Clear the old secondary secret from this device
     const fingerprint = await getStorageScope(pubkeyHex);
-    setSecondarySecret(fingerprint, newSecret);
+    clearSecondarySecret(fingerprint);
 
     setStatus("success");
     setNewSecondarySecret(newSecret);
