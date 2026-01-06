@@ -180,6 +180,7 @@ function AudioPlayerInner({
       const ctx = new AudioContextClass();
       const source = ctx.createMediaElementSource(audio);
       const gainNode = ctx.createGain();
+      gainNode.gain.value = gainRef.current;
 
       source.connect(gainNode);
       gainNode.connect(ctx.destination);
