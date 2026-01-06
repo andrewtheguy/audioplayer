@@ -1318,7 +1318,7 @@ function AudioPlayerInner({
               <Slider
                 value={[gain]}
                 min={1}
-                max={3}
+                max={2}
                 step={0.1}
                 onValueChange={(v) => setGain(v[0])}
                 disabled={isViewOnly}
