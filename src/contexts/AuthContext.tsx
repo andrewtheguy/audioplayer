@@ -54,6 +54,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         return;
       }
+
+      // Stored credentials exist but are invalid - clear them
+      localStorage.removeItem(NPUB_KEY);
+      localStorage.removeItem(SECRET_KEY);
     }
 
     setState((prev) => ({ ...prev, isLoading: false }));
@@ -118,7 +122,8 @@ export function useAuth(): AuthContextValue {
   return context;
 }
 
-// Export storage keys for use by other modules
+// Export storage keys for readonly/cleanup only — do not mutate auth state directly.
+// Use login() and logout() from useAuth() to modify authentication state.
 export const AUTH_STORAGE_KEYS = {
   NPUB: NPUB_KEY,
   SECRET: SECRET_KEY,
