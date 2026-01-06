@@ -99,7 +99,6 @@ function AudioPlayerInner({
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [isLiveStream, setIsLiveStream] = useState(false);
-  const [gainEnabled, setGainEnabled] = useState(false);
   const [gain, setGain] = useState(1); // 1 = 100%
   const [isViewOnly, setIsViewOnly] = useState(false);
   const [actualSessionStatus, setActualSessionStatus] = useState<SessionStatus>("no_npub");
@@ -198,36 +197,16 @@ function AudioPlayerInner({
   }, []);
 
   const resumeBoostContext = useCallback(() => {
-    if (!gainEnabled) return;
     if (!ensureGainNode()) return;
     resumeAudioContext();
-  }, [gainEnabled, ensureGainNode, resumeAudioContext]);
+  }, [ensureGainNode, resumeAudioContext]);
 
-  // Apply gain value when enabled
+  // Apply gain value
   useEffect(() => {
     if (gainNodeRef.current) {
-      gainNodeRef.current.gain.value = gainEnabled ? gain : 1;
+      gainNodeRef.current.gain.value = gain;
     }
-  }, [gain, gainEnabled]);
-
-  // Handle gain toggle
-  const handleGainToggle = useCallback(() => {
-    if (gainEnabled) {
-      setGainEnabled(false);
-      if (gainNodeRef.current) {
-        gainNodeRef.current.gain.value = 1;
-      }
-      return;
-    }
-
-    if (!ensureGainNode() || !gainNodeRef.current) {
-      return;
-    }
-
-    gainNodeRef.current.gain.value = gainRef.current;
-    resumeAudioContext();
-    setGainEnabled(true);
-  }, [gainEnabled, ensureGainNode, resumeAudioContext]);
+  }, [gain]);
 
   // Save history entry with an explicit position (skip for live streams)
   const saveHistoryEntry = useCallback((position?: number, options?: { allowLive?: boolean }) => {
@@ -326,8 +305,7 @@ function AudioPlayerInner({
     setCurrentTime(0);
     setDuration(0);
     setIsLiveStream(false);
-    // Reset gain enabled (user must re-enable manually), but load saved gain value
-    setGainEnabled(false);
+    // Load saved gain value
     setGain(entry.gain ?? 1);
 
     // Set pending seek position from history entry
@@ -444,7 +422,6 @@ function AudioPlayerInner({
     setDuration(0);
     setIsLiveStream(false);
     isLiveStreamRef.current = false;
-    setGainEnabled(false);
     setGain(1);
     pendingSeekPositionRef.current = null;
 
@@ -1301,34 +1278,19 @@ function AudioPlayerInner({
 
         {/* Gain Control */}
         <div className="flex items-center gap-3">
-          <button
-            onClick={handleGainToggle}
+          <span className="text-xs text-muted-foreground">Boost</span>
+          <Slider
+            value={[gain]}
+            min={1}
+            max={2}
+            step={0.1}
+            onValueChange={(v) => setGain(v[0])}
             disabled={!isLoaded || isViewOnly}
-            className={`text-xs px-2 py-1 rounded border transition-colors ${
-              gainEnabled
-                ? "bg-primary text-primary-foreground border-primary"
-                : "bg-background text-muted-foreground border-border hover:bg-accent"
-            } disabled:opacity-50 disabled:cursor-not-allowed`}
-            title="Enable amplification beyond 100%"
-          >
-            Boost
-          </button>
-          {gainEnabled && (
-            <>
-              <Slider
-                value={[gain]}
-                min={1}
-                max={2}
-                step={0.1}
-                onValueChange={(v) => setGain(v[0])}
-                disabled={isViewOnly}
-                className="w-24"
-              />
-              <span className="text-xs text-muted-foreground w-12">
-                {Math.round(gain * 100)}%
-              </span>
-            </>
-          )}
+            className="w-24"
+          />
+          <span className="text-xs text-muted-foreground w-12">
+            {Math.round(gain * 100)}%
+          </span>
         </div>
         </div>
       )}
