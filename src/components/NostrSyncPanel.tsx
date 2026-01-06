@@ -35,6 +35,17 @@ export function NostrSyncPanel({
 
   // Input states
   const [nsecInput, setNsecInput] = useState("");
+  const [nsecTouched, setNsecTouched] = useState(false);
+
+  // Validate nsec format (starts with "nsec1" and has reasonable length)
+  const isValidNsecFormat = (value: string): boolean => {
+    const trimmed = value.trim();
+    return trimmed.startsWith("nsec1") && trimmed.length >= 60;
+  };
+
+  const nsecError = nsecTouched && nsecInput.trim() && !isValidNsecFormat(nsecInput)
+    ? "Must start with 'nsec1' and be at least 60 characters"
+    : null;
 
   const {
     playerId,
@@ -95,9 +106,14 @@ export function NostrSyncPanel({
   }, []);
 
   const handleSetupWithNsec = async () => {
+    if (!isValidNsecFormat(nsecInput)) {
+      setNsecTouched(true);
+      return;
+    }
     const result = await setupWithNsec(nsecInput.trim());
     if (result) {
       setNsecInput("");
+      setNsecTouched(false);
     }
   };
 
@@ -139,16 +155,20 @@ export function NostrSyncPanel({
                 type="password"
                 value={nsecInput}
                 onChange={(e) => setNsecInput(e.target.value)}
+                onBlur={() => setNsecTouched(true)}
                 placeholder="nsec1..."
-                className="h-8 text-xs font-mono"
-                onKeyDown={(e) => e.key === "Enter" && handleSetupWithNsec()}
+                className={cn("h-8 text-xs font-mono", nsecError && "border-destructive")}
+                onKeyDown={(e) => e.key === "Enter" && isValidNsecFormat(nsecInput) && handleSetupWithNsec()}
               />
+              {nsecError && (
+                <div className="text-[10px] text-destructive">{nsecError}</div>
+              )}
             </div>
             <Button
               size="sm"
               variant="default"
               onClick={handleSetupWithNsec}
-              disabled={isLoading || !nsecInput.trim()}
+              disabled={isLoading || !isValidNsecFormat(nsecInput)}
               className="w-full h-8 text-xs"
             >
               Create Player ID
@@ -297,16 +317,18 @@ export function NostrSyncPanel({
       </div>
 
       {/* Logout button */}
-      <div className="pt-2 border-t">
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={handleLogout}
-          className="w-full h-8 text-xs text-muted-foreground hover:text-destructive"
-        >
-          Logout
-        </Button>
-      </div>
+      {authNpub && (
+        <div className="pt-2 border-t">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={handleLogout}
+            className="w-full h-8 text-xs text-muted-foreground hover:text-destructive"
+          >
+            Logout
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

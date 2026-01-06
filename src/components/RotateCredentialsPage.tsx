@@ -20,6 +20,24 @@ import {
   saveHistoryToNostr,
 } from "@/lib/nostr-sync";
 
+const RELAY_TIMEOUT_MS = 10000;
+
+class TimeoutError extends Error {
+  constructor(message = "Operation timed out") {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
+
+function withTimeout<T>(ms: number, promise: Promise<T>): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new TimeoutError()), ms)
+    ),
+  ]);
+}
+
 export function RotateCredentialsPage() {
   const navigate = useNavigate();
 
@@ -53,6 +71,9 @@ export function RotateCredentialsPage() {
   };
 
   const handleBackToHome = () => {
+    setNsecInput("");
+    setCurrentSecretInput("");
+    setDerivedNpub(null);
     navigate("/");
   };
 
@@ -93,13 +114,19 @@ export function RotateCredentialsPage() {
       }
 
       try {
-        // Load old player ID using the provided secret
-        const oldPlayerId = await loadPlayerIdFromNostr(pubkeyHex, trimmedSecret);
+        // Load old player ID using the provided secret (with timeout)
+        const oldPlayerId = await withTimeout(
+          RELAY_TIMEOUT_MS,
+          loadPlayerIdFromNostr(pubkeyHex, trimmedSecret)
+        );
 
         if (oldPlayerId) {
           // Derive old encryption keys and load history
           const oldKeys = await deriveEncryptionKey(oldPlayerId);
-          const historyPayload = await loadHistoryFromNostr(oldKeys);
+          const historyPayload = await withTimeout(
+            RELAY_TIMEOUT_MS,
+            loadHistoryFromNostr(oldKeys)
+          );
 
           if (historyPayload) {
             historyToMigrate = historyPayload.history;
@@ -111,7 +138,11 @@ export function RotateCredentialsPage() {
         }
       } catch (err) {
         console.warn("Failed to load history for migration:", err);
-        setMessage("Failed to load history with the provided secret.");
+        if (err instanceof TimeoutError) {
+          setMessage("Relay connection timed out. Please try again.");
+        } else {
+          setMessage("Failed to load history with the provided secret.");
+        }
         setStatus("error");
         return;
       }

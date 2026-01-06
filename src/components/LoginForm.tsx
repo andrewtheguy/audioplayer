@@ -124,14 +124,11 @@ export function LoginForm() {
       <div className="text-center space-y-2">
         <Link to="/rotate">
           <Button variant="outline" className="w-full h-9">
-            Generate New Identity
+            Rotate Credentials
           </Button>
         </Link>
         <p className="text-xs text-muted-foreground">
-          Sync issues or need a fresh start?{" "}
-          <Link to="/rotate" className="text-primary hover:underline">
-            Rotate credentials
-          </Link>
+          Sync issues, compromised credentials, or need a fresh start?
         </p>
       </div>
     </div>

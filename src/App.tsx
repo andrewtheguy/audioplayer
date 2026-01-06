@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from "react-router";
 import { AudioPlayer } from "@/components/AudioPlayer";
 import { RotateCredentialsPage } from "@/components/RotateCredentialsPage";
 import { LoginForm } from "@/components/LoginForm";
+import { NotFoundPage } from "@/components/NotFoundPage";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 
 function HomePage() {
@@ -46,12 +47,21 @@ function RotateRoute() {
   );
 }
 
+function NotFoundRoute() {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center p-4">
+      <NotFoundPage />
+    </div>
+  );
+}
+
 function App() {
   return (
     <AuthProvider>
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/rotate" element={<RotateRoute />} />
+        <Route path="*" element={<NotFoundRoute />} />
       </Routes>
     </AuthProvider>
   );

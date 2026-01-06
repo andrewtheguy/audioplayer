@@ -311,6 +311,12 @@ export function useNostrSession({
         return false;
       }
 
+      // Verify identity exists
+      if (!authPubkeyHex) {
+        setSessionNotice("No identity found. Please log in first.");
+        return false;
+      }
+
       // Verify nsec matches npub
       const derivedPubkey = getPublicKey(privateKeyBytes);
       if (derivedPubkey !== authPubkeyHex) {
@@ -333,7 +339,7 @@ export function useNostrSession({
           newPlayerId,
           authSecondarySecret,
           privateKeyBytes,
-          authPubkeyHex!
+          authPubkeyHex
         );
       } catch (err) {
         setSessionNotice(
