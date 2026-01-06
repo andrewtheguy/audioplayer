@@ -1,6 +1,6 @@
 /**
  * Identity management: npub/nsec handling
- * All localStorage keys are scoped by npub fingerprint for isolation
+ * Uses global localStorage keys (single user at a time)
  * Note: Player ID is not cached locally - it's always fetched from relay
  */
 
@@ -13,78 +13,53 @@ export interface IdentityState {
   hasSecondarySecret: boolean;
 }
 
-/**
- * Get storage scope key for localStorage isolation (first 32 hex chars / 128 bits of SHA-256 of pubkey)
- */
-export async function getStorageScope(pubkeyHex: string): Promise<string> {
-  // Validate input
-  if (!pubkeyHex || typeof pubkeyHex !== "string") {
-    throw new Error("Invalid pubkeyHex: must be a non-empty string");
-  }
-  if (!/^[0-9a-fA-F]+$/.test(pubkeyHex)) {
-    throw new Error("Invalid pubkeyHex: must contain only hexadecimal characters");
-  }
-  if (pubkeyHex.length !== 64) {
-    throw new Error("Invalid pubkeyHex: expected 64 hex characters (32 bytes)");
-  }
-
-  let hashBuffer: ArrayBuffer;
-  try {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(pubkeyHex);
-    hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  } catch (err) {
-    throw new Error(
-      `Failed to compute storage scope: ${err instanceof Error ? err.message : "Unknown crypto error"}`
-    );
-  }
-
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-  return hashHex.slice(0, 32);
-}
-
 // =============================================================================
-// Secondary Secret Management
+// Global Storage Keys
 // =============================================================================
 
-function getSecondarySecretKey(fingerprint: string): string {
-  return `${STORAGE_PREFIX}.secondary-secret.${fingerprint}`;
-}
+export const STORAGE_KEYS = {
+  NPUB: `${STORAGE_PREFIX}.npub`,
+  SECONDARY_SECRET: `${STORAGE_PREFIX}.secondary-secret`,
+  HISTORY: `${STORAGE_PREFIX}.history.v1`,
+} as const;
+
+// =============================================================================
+// Secondary Secret Management (Global - not scoped by user)
+// =============================================================================
 
 /**
- * Get secondary secret from localStorage for a given npub fingerprint
+ * Get secondary secret from localStorage
  */
-export function getSecondarySecret(fingerprint: string): string | null {
+export function getSecondarySecret(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem(getSecondarySecretKey(fingerprint));
+  return localStorage.getItem(STORAGE_KEYS.SECONDARY_SECRET);
 }
 
 /**
  * Store secondary secret in localStorage
  */
-export function setSecondarySecret(fingerprint: string, secret: string): void {
+export function setSecondarySecret(secret: string): void {
   if (typeof window === "undefined") return;
-  localStorage.setItem(getSecondarySecretKey(fingerprint), secret);
+  localStorage.setItem(STORAGE_KEYS.SECONDARY_SECRET, secret);
 }
 
 /**
  * Clear secondary secret from localStorage
  */
-export function clearSecondarySecret(fingerprint: string): void {
+export function clearSecondarySecret(): void {
   if (typeof window === "undefined") return;
-  localStorage.removeItem(getSecondarySecretKey(fingerprint));
+  localStorage.removeItem(STORAGE_KEYS.SECONDARY_SECRET);
 }
 
 // =============================================================================
-// History Storage (per npub fingerprint)
+// History Storage (Global - not scoped by user)
 // =============================================================================
 
 /**
- * Get history storage key for a given fingerprint
+ * Get history storage key
  */
-export function getHistoryStorageKey(fingerprint: string): string {
-  return `${STORAGE_PREFIX}.history.v1.${fingerprint}`;
+export function getHistoryStorageKey(): string {
+  return STORAGE_KEYS.HISTORY;
 }
 
 // =============================================================================
@@ -92,10 +67,11 @@ export function getHistoryStorageKey(fingerprint: string): string {
 // =============================================================================
 
 /**
- * Clear all identity-related data for a given fingerprint
+ * Clear all identity-related data
  */
-export function clearAllIdentityData(fingerprint: string): void {
+export function clearAllIdentityData(): void {
   if (typeof window === "undefined") return;
-  clearSecondarySecret(fingerprint);
-  localStorage.removeItem(getHistoryStorageKey(fingerprint));
+  localStorage.removeItem(STORAGE_KEYS.NPUB);
+  localStorage.removeItem(STORAGE_KEYS.SECONDARY_SECRET);
+  localStorage.removeItem(STORAGE_KEYS.HISTORY);
 }

@@ -83,10 +83,8 @@ function AudioPlayerInner({
   const pendingSeekAttemptsRef = useRef<number>(0);
   const seekingToTargetRef = useRef<boolean>(false);
   const pendingSeekPositionRef = useRef<number | null>(null);
-  const fingerprintRef = useRef<string | undefined>(undefined);
 
   const [url, setUrl] = useState(initialUrl);
-  const [storageFingerprint, setStorageFingerprint] = useState<string | undefined>(undefined);
   const [title, setTitle] = useState("");
   const [nowPlayingUrl, setNowPlayingUrl] = useState<string | null>(null);
   const [nowPlayingTitle, setNowPlayingTitle] = useState<string | null>(null);
@@ -95,13 +93,13 @@ function AudioPlayerInner({
   const [duration, setDuration] = useState(0);
   const [isLoaded, setIsLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [history, setHistory] = useState<HistoryEntry[]>(() => getHistory());
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [isLiveStream, setIsLiveStream] = useState(false);
   const [gain, setGain] = useState(1); // 1 = 100%
   const [isViewOnly, setIsViewOnly] = useState(false);
-  const [actualSessionStatus, setActualSessionStatus] = useState<SessionStatus>("no_npub");
+  const [actualSessionStatus, setActualSessionStatus] = useState<SessionStatus>("loading");
   const [editingUrl, setEditingUrl] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [showLoadInputs, setShowLoadInputs] = useState(true);
@@ -122,20 +120,6 @@ function AudioPlayerInner({
   useEffect(() => {
     gainRef.current = gain;
   }, [gain]);
-
-  useEffect(() => {
-    fingerprintRef.current = storageFingerprint;
-  }, [storageFingerprint]);
-
-  // Load history when fingerprint changes (scoped storage)
-  useEffect(() => {
-    setHistory(getHistory(storageFingerprint));
-  }, [storageFingerprint]);
-
-  // Handle fingerprint change from NostrSyncPanel
-  const handleFingerprintChange = useCallback((fingerprint: string | undefined) => {
-    setStorageFingerprint(fingerprint);
-  }, []);
 
   // Clear pause timestamp when playing starts
   useEffect(() => {
@@ -239,7 +223,7 @@ function AudioPlayerInner({
         newHistory = [entry, ...prev].slice(0, MAX_HISTORY_ENTRIES);
       }
 
-      saveHistory(newHistory, fingerprintRef.current);
+      saveHistory(newHistory);
       return newHistory;
     });
   }, []);
@@ -403,7 +387,7 @@ function AudioPlayerInner({
       if (updatedEntry !== historyEntry) {
         setHistory((prev) => {
           const newHistory = [updatedEntry, ...prev.filter((h) => h.url !== updatedEntry.url)];
-          saveHistory(newHistory, fingerprintRef.current);
+          saveHistory(newHistory);
           return newHistory;
         });
       }
@@ -774,7 +758,7 @@ function AudioPlayerInner({
         lastPlayedAt: new Date().toISOString(),
       };
       const newHistory = [updatedEntry, ...prev.filter((h) => h.url !== entry.url)];
-      saveHistory(newHistory, fingerprintRef.current);
+      saveHistory(newHistory);
       return newHistory;
     });
     loadFromHistory(entry);
@@ -796,7 +780,7 @@ function AudioPlayerInner({
       const newHistory = prev.map((item) =>
         item.url === entry.url ? { ...item, title: normalized } : item
       );
-      saveHistory(newHistory, fingerprintRef.current);
+      saveHistory(newHistory);
       return newHistory;
     });
     if (nowPlayingUrl === entry.url) {
@@ -827,7 +811,7 @@ function AudioPlayerInner({
       const newHistory = prev.map((entry) =>
         entry.url === nowPlayingUrl ? { ...entry, title: normalized } : entry
       );
-      saveHistory(newHistory, fingerprintRef.current);
+      saveHistory(newHistory);
       return newHistory;
     });
     setNowPlayingTitle(normalized ?? null);
@@ -865,7 +849,7 @@ function AudioPlayerInner({
     if (!confirm("Delete this entry from history?")) return;
     setHistory((prev) => {
       const newHistory = prev.filter((h) => h.url !== urlToDelete);
-      saveHistory(newHistory, fingerprintRef.current);
+      saveHistory(newHistory);
       return newHistory;
     });
   };
@@ -873,7 +857,7 @@ function AudioPlayerInner({
   const handleClearHistory = () => {
     if (!confirm("Clear all history? This cannot be undone.")) return;
     setHistory([]);
-    saveHistory([], fingerprintRef.current);
+    saveHistory([]);
   };
 
   // Cross-tab sync: reload history when tab becomes visible if it was updated elsewhere
@@ -885,12 +869,12 @@ function AudioPlayerInner({
         if (pausedAt === null) return;
 
         // Get the history timestamp (atomic with history data)
-        const historyUpdatedAt = getHistoryTimestamp(fingerprintRef.current);
+        const historyUpdatedAt = getHistoryTimestamp();
         if (historyUpdatedAt === null) return;
 
         // If history was updated after we paused, reload it
         if (historyUpdatedAt > pausedAt) {
-          const freshHistory = getHistory(fingerprintRef.current);
+          const freshHistory = getHistory();
           setHistory(freshHistory);
 
           // Load the most recent entry if available (paused state)
@@ -959,7 +943,7 @@ function AudioPlayerInner({
   const handleSessionStatusChange = useCallback((status: SessionStatus) => {
     // View-only states: disable controls and unmount audio element
     // Only "active" allows full interaction
-    const viewOnlyStatuses: SessionStatus[] = ["no_npub", "needs_secret", "loading", "needs_setup", "idle", "stale", "invalid"];
+    const viewOnlyStatuses: SessionStatus[] = ["loading", "needs_setup", "idle", "stale"];
     setIsViewOnly(viewOnlyStatuses.includes(status));
     setActualSessionStatus(status);
     if (status === "stale") {
@@ -1067,15 +1051,7 @@ function AudioPlayerInner({
         )
       )}
 
-      {actualSessionStatus === "no_npub" ? (
-        <div className="text-sm text-muted-foreground bg-muted/50 border border-border p-3 rounded-md">
-          Generate a new identity or enter an existing npub to start.
-        </div>
-      ) : actualSessionStatus === "needs_secret" ? (
-        <div className="text-sm text-amber-700 bg-amber-500/10 border border-amber-500/20 p-3 rounded-md">
-          Enter your secondary secret to unlock this identity.
-        </div>
-      ) : actualSessionStatus === "needs_setup" ? (
+      {actualSessionStatus === "needs_setup" ? (
         <div className="text-sm text-purple-700 bg-purple-500/10 border border-purple-500/20 p-3 rounded-md">
           Setup required. Enter your nsec to create a player ID.
         </div>
@@ -1090,10 +1066,6 @@ function AudioPlayerInner({
       ) : actualSessionStatus === "idle" ? (
         <div className="text-sm text-blue-700 bg-blue-500/10 border border-blue-500/20 p-3 rounded-md">
           Ready. Start a session to enable controls.
-        </div>
-      ) : actualSessionStatus === "invalid" ? (
-        <div className="text-sm text-red-700 bg-red-500/10 border border-red-500/20 p-3 rounded-md">
-          Invalid npub format. Check URL or generate a new identity.
         </div>
       ) : error ? (
         <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
@@ -1441,14 +1413,13 @@ function AudioPlayerInner({
           history={history}
           onHistoryLoaded={(merged) => {
             setHistory(merged);
-            saveHistory(merged, fingerprintRef.current);
+            saveHistory(merged);
           }}
           onSessionStatusChange={handleSessionStatusChange}
           onTakeOver={(remoteHistory) => {
             handleRemoteSync(remoteHistory);
           }}
           onRemoteSync={handleRemoteSync}
-          onFingerprintChange={handleFingerprintChange}
           sessionId={sessionId}
           isPlayingRef={isPlayingRef}
         />

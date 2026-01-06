@@ -1,16 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RELAYS } from "@/lib/nostr-sync";
-import { getStorageScope } from "@/lib/identity";
-import { generateSecondarySecret, parseNpub } from "@/lib/nostr-crypto";
 import { cn } from "@/lib/utils";
 import {
   useNostrSession,
   type SessionStatus,
 } from "@/hooks/useNostrSession";
 import { useNostrSync } from "@/hooks/useNostrSync";
+import { useAuth } from "@/contexts/AuthContext";
 import type { HistoryEntry } from "@/lib/history";
 
 interface NostrSyncPanelProps {
@@ -19,7 +17,6 @@ interface NostrSyncPanelProps {
   onSessionStatusChange?: (status: SessionStatus) => void;
   onTakeOver?: (remoteHistory: HistoryEntry[]) => void;
   onRemoteSync?: (remoteHistory: HistoryEntry[]) => void;
-  onFingerprintChange?: (fingerprint: string | undefined) => void;
   sessionId?: string;
   isPlayingRef?: React.RefObject<boolean>;
 }
@@ -30,27 +27,16 @@ export function NostrSyncPanel({
   onSessionStatusChange,
   onTakeOver,
   onRemoteSync,
-  onFingerprintChange,
   sessionId,
   isPlayingRef,
 }: NostrSyncPanelProps) {
-  const navigate = useNavigate();
-  const { npub: npubParam } = useParams<{ npub?: string }>();
-
+  const { logout, npub: authNpub } = useAuth();
   const [showDetails, setShowDetails] = useState(false);
-  const [copiedLink, setCopiedLink] = useState(false);
 
   // Input states
-  const [secondarySecretInput, setSecondarySecretInput] = useState("");
   const [nsecInput, setNsecInput] = useState("");
-  const [npubInput, setNpubInput] = useState("");
-  const [generatedIdentity, setGeneratedIdentity] = useState<{ npub: string; nsec: string; secondarySecret: string } | null>(null);
-  // Generation flow: show_credentials -> done
-  const [generationStep, setGenerationStep] = useState<"show_credentials" | null>(null);
 
   const {
-    npub,
-    pubkeyHex,
     playerId,
     encryptionKeys,
     sessionStatus,
@@ -61,17 +47,13 @@ export function NostrSyncPanel({
     setSessionNotice,
     clearSessionNotice,
     startTakeoverGrace,
-    generateNewIdentity,
-    submitSecondarySecret,
     setupWithNsec,
   } = useNostrSession({
-    npub: npubParam ?? null,
-    onNavigate: navigate,
     sessionId,
     onSessionStatusChange,
   });
 
-  const { status, message, lastOperation, setMessage, performSave, performLoad, startSession } =
+  const { status, message, lastOperation, performSave, performLoad, startSession } =
     useNostrSync({
       history,
       encryptionKeys,
@@ -90,7 +72,6 @@ export function NostrSyncPanel({
 
   const messageRef = useRef<string | null>(null);
   const copyMessageTimerRef = useRef<number | null>(null);
-  const copiedLinkTimerRef = useRef<number | null>(null);
 
   const isLoading = status === "saving" || status === "loading" || sessionStatus === "loading";
   const displayMessage = sessionNotice ?? message;
@@ -106,10 +87,6 @@ export function NostrSyncPanel({
 
   useEffect(() => {
     return () => {
-      if (copiedLinkTimerRef.current) {
-        clearTimeout(copiedLinkTimerRef.current);
-        copiedLinkTimerRef.current = null;
-      }
       if (copyMessageTimerRef.current) {
         clearTimeout(copyMessageTimerRef.current);
         copyMessageTimerRef.current = null;
@@ -117,135 +94,10 @@ export function NostrSyncPanel({
     };
   }, []);
 
-  // Compute storage fingerprint from pubkey and notify parent
-  useEffect(() => {
-    if (!pubkeyHex) {
-      onFingerprintChange?.(undefined);
-      return;
-    }
-    let cancelled = false;
-    getStorageScope(pubkeyHex)
-      .then((fingerprint) => {
-        if (!cancelled) {
-          onFingerprintChange?.(fingerprint);
-        }
-      })
-      .catch((err) => {
-        console.error("Failed to compute storage fingerprint:", err);
-        if (!cancelled) {
-          onFingerprintChange?.(undefined);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pubkeyHex]);
-
-  const handleStartGeneration = async () => {
-    // Generate everything at once and show credentials
-    const newSecret = generateSecondarySecret();
-    try {
-      const identity = await generateNewIdentity();
-      setGeneratedIdentity({
-        ...identity,
-        secondarySecret: newSecret,
-      });
-      setGenerationStep("show_credentials");
-    } catch (err) {
-      setSessionNotice(`Failed to generate identity: ${err instanceof Error ? err.message : "Unknown error"}`);
-    }
-  };
-
-  const handleConfirmIdentity = async () => {
-    if (!generatedIdentity) return;
-
-    // Now set up with the nsec and secondary secret
-    const result = await setupWithNsec(generatedIdentity.nsec, generatedIdentity.secondarySecret);
-    if (result) {
-      setGeneratedIdentity(null);
-      setGenerationStep(null);
-      setSecondarySecretInput("");
-    }
-  };
-
-  const handleCancelGeneration = () => {
-    setGenerationStep(null);
-    setGeneratedIdentity(null);
-    setSecondarySecretInput("");
-    // Remove the npub from URL if it was set (replaceState to avoid adding history entry)
-    if (typeof window !== "undefined") {
-      const needsCleanup = window.location.pathname !== "/" || window.location.hash;
-      if (needsCleanup) {
-        navigate("/", { replace: true });
-      }
-    }
-  };
-
-  const handleNavigateToNpub = () => {
-    const trimmed = npubInput.trim();
-    if (!trimmed.startsWith("npub1")) {
-      setSessionNotice("Invalid npub format. Must start with 'npub1'.");
-      return;
-    }
-    if (!parseNpub(trimmed)) {
-      setSessionNotice("Invalid npub format.");
-      return;
-    }
-    setNpubInput("");
-    navigate(`/${trimmed}`);
-  };
-
-  const handleBackToHome = () => {
-    navigate("/");
-  };
-
-  const handleSubmitSecondarySecret = async () => {
-    const result = await submitSecondarySecret(secondarySecretInput.trim());
-    if (result) {
-      setSecondarySecretInput("");
-    }
-  };
-
   const handleSetupWithNsec = async () => {
-    const result = await setupWithNsec(nsecInput.trim(), secondarySecretInput.trim() || undefined);
+    const result = await setupWithNsec(nsecInput.trim());
     if (result) {
       setNsecInput("");
-      setSecondarySecretInput("");
-      setGeneratedIdentity(null);
-    }
-  };
-
-  const handleCopyLink = async () => {
-    if (!npub) return;
-    const url = window.location.href;
-
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopiedLink(true);
-      if (copiedLinkTimerRef.current) {
-        clearTimeout(copiedLinkTimerRef.current);
-      }
-      copiedLinkTimerRef.current = window.setTimeout(() => {
-        setCopiedLink(false);
-        copiedLinkTimerRef.current = null;
-      }, 2000);
-
-      if (status !== "success") {
-        setMessage("URL copied!");
-        if (copyMessageTimerRef.current) {
-          clearTimeout(copyMessageTimerRef.current);
-        }
-        copyMessageTimerRef.current = window.setTimeout(() => {
-          if (messageRef.current === "URL copied!") {
-            setMessage(null);
-          }
-          copyMessageTimerRef.current = null;
-        }, 3000);
-      }
-    } catch (err) {
-      console.error("Failed to copy link:", err);
-      setMessage("Failed to copy URL");
     }
   };
 
@@ -258,143 +110,13 @@ export function NostrSyncPanel({
     startSession();
   };
 
+  const handleLogout = () => {
+    logout();
+  };
+
   // Render based on session status
   const renderContent = () => {
-    // Priority: Show credentials screen if in generation flow (regardless of sessionStatus)
-    // This is needed because generateNewIdentity sets the URL hash, which changes sessionStatus
-    if (generationStep === "show_credentials" && generatedIdentity) {
-      return (
-        <div className="space-y-3">
-          <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded text-amber-700 text-xs">
-            <strong>Save these credentials now!</strong> You will need them to recover this identity.
-          </div>
-          <div className="space-y-2 p-2 bg-muted/50 rounded">
-            <div>
-              <div className="text-[10px] text-muted-foreground font-medium">npub (public, shareable):</div>
-              <code className="font-mono text-[10px] block mt-0.5 select-all break-all">
-                {generatedIdentity.npub}
-              </code>
-            </div>
-            <div>
-              <div className="text-[10px] text-muted-foreground font-medium">nsec (private, keep secret):</div>
-              <code className="font-mono text-[10px] block mt-0.5 select-all break-all text-red-600">
-                {generatedIdentity.nsec}
-              </code>
-            </div>
-            <div>
-              <div className="text-[10px] text-muted-foreground font-medium">Secondary Secret (for device sync):</div>
-              <code className="font-mono text-[10px] block mt-0.5 select-all break-all text-blue-600">
-                {generatedIdentity.secondarySecret}
-              </code>
-            </div>
-          </div>
-          <div className="text-[10px] text-muted-foreground">
-            The secondary secret is needed on each new device. The nsec is only needed for initial setup or player ID rotation.
-          </div>
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="default"
-              onClick={handleConfirmIdentity}
-              disabled={isLoading}
-              className="flex-1 h-8 text-xs"
-            >
-              {isLoading ? "Creating..." : "I've Saved These - Continue"}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={handleCancelGeneration}
-              className="h-8 text-xs"
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      );
-    }
-
     switch (sessionStatus) {
-      case "no_npub":
-        return (
-          <div className="space-y-3">
-            <div className="text-xs text-muted-foreground">
-              Generate a new identity or enter an existing npub to sync your playback history across devices.
-            </div>
-            <Button
-              size="sm"
-              variant="default"
-              onClick={handleStartGeneration}
-              className="w-full h-8 text-xs"
-            >
-              Generate New Identity
-            </Button>
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-background px-2 text-muted-foreground">Or</span>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Input
-                type="text"
-                value={npubInput}
-                onChange={(e) => setNpubInput(e.target.value)}
-                placeholder="npub1..."
-                className="h-8 text-xs font-mono"
-                onKeyDown={(e) => e.key === "Enter" && npubInput.trim() && handleNavigateToNpub()}
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleNavigateToNpub}
-                disabled={!npubInput.trim()}
-                className="w-full h-8 text-xs"
-              >
-                Use Existing Identity
-              </Button>
-            </div>
-          </div>
-        );
-
-      case "needs_secret":
-        return (
-          <div className="space-y-3">
-            <div className="text-xs text-muted-foreground">
-              Enter your secondary secret to unlock this identity.
-            </div>
-            <Input
-              type="password"
-              value={secondarySecretInput}
-              onChange={(e) => setSecondarySecretInput(e.target.value)}
-              placeholder="Enter secondary secret"
-              className="h-8 text-xs font-mono"
-              onKeyDown={(e) => e.key === "Enter" && handleSubmitSecondarySecret()}
-            />
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="default"
-                onClick={handleSubmitSecondarySecret}
-                disabled={isLoading || !secondarySecretInput.trim()}
-                className="flex-1 h-8 text-xs"
-              >
-                Unlock
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={handleBackToHome}
-                className="h-8 text-xs"
-              >
-                Back
-              </Button>
-            </div>
-          </div>
-        );
-
       case "loading":
         return (
           <div className="space-y-2">
@@ -455,18 +177,8 @@ export function NostrSyncPanel({
       case "active":
         return (
           <div className="space-y-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleCopyLink}
-              className="w-full h-8 text-xs"
-              title="Copy URL to sync across devices"
-            >
-              {copiedLink ? <CheckIcon className="w-3.5 h-3.5 mr-1" /> : <LinkIcon className="w-3.5 h-3.5 mr-1" />}
-              {copiedLink ? "Copied" : "Copy Sync URL"}
-            </Button>
             <div className="text-[10px] text-muted-foreground text-center px-1">
-              Auto-save enabled. Bookmark this URL.
+              Session active. Auto-save enabled.
             </div>
           </div>
         );
@@ -486,31 +198,12 @@ export function NostrSyncPanel({
           </div>
         );
 
-      case "invalid":
-        return (
-          <div className="space-y-2">
-            <div className="text-xs text-red-600">
-              Invalid npub format. Check the URL or generate a new identity.
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleStartGeneration}
-              className="w-full h-8 text-xs"
-            >
-              Generate New Identity
-            </Button>
-          </div>
-        );
-
       default:
         return null;
     }
   };
 
   const getStatusBadge = () => {
-    if (!npub) return null;
-
     switch (sessionStatus) {
       case "active":
         return <span className="text-[10px] text-green-500 font-bold px-1.5 py-0.5 bg-green-500/10 rounded-full">ACTIVE</span>;
@@ -520,12 +213,8 @@ export function NostrSyncPanel({
         return <span className="text-[10px] text-blue-500 font-bold px-1.5 py-0.5 bg-blue-500/10 rounded-full">READY</span>;
       case "loading":
         return <span className="text-[10px] text-muted-foreground font-bold px-1.5 py-0.5 bg-muted/50 rounded-full">LOADING</span>;
-      case "needs_secret":
-        return <span className="text-[10px] text-amber-500 font-bold px-1.5 py-0.5 bg-amber-500/10 rounded-full">LOCKED</span>;
       case "needs_setup":
         return <span className="text-[10px] text-purple-500 font-bold px-1.5 py-0.5 bg-purple-500/10 rounded-full">SETUP</span>;
-      case "invalid":
-        return <span className="text-[10px] text-red-500 font-bold px-1.5 py-0.5 bg-red-500/10 rounded-full">ERROR</span>;
       default:
         return null;
     }
@@ -549,8 +238,7 @@ export function NostrSyncPanel({
           status === "error" && "text-destructive bg-destructive/5 border border-destructive/10",
           status !== "error" && "text-muted-foreground",
           sessionStatus === "stale" && displayMessage && "bg-amber-500/10 text-amber-600 border border-amber-500/20",
-          sessionStatus === "idle" && displayMessage && "bg-blue-500/10 text-blue-600 border border-blue-500/20",
-          sessionStatus === "invalid" && displayMessage && "bg-red-500/10 text-red-600 border border-red-500/20"
+          sessionStatus === "idle" && displayMessage && "bg-blue-500/10 text-blue-600 border border-blue-500/20"
         )}
       >
         {displayMessage}
@@ -581,64 +269,44 @@ export function NostrSyncPanel({
                 </li>
               ))}
             </ul>
-            {npub && (
+            {authNpub && (
               <div className="pt-2">
                 <div className="font-medium">npub:</div>
                 <code className="font-mono text-[10px] block mt-0.5 select-all break-all">
-                  {npub}
+                  {authNpub}
                 </code>
                 <div className="font-medium mt-1">Session ID:</div>
                 <code className="font-mono text-[10px] block mt-0.5 select-all truncate">
                   {localSessionId}
                 </code>
                 {sessionStatus === "active" && (
-                  <>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => performSave(history)}
-                      disabled={isLoading}
-                      className="mt-3 w-full h-7 text-[10px]"
-                    >
-                      {status === "saving" ? "Saving..." : "Force Sync"}
-                    </Button>
-                  </>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => performSave(history)}
+                    disabled={isLoading}
+                    className="mt-3 w-full h-7 text-[10px]"
+                  >
+                    {status === "saving" ? "Saving..." : "Force Sync"}
+                  </Button>
                 )}
               </div>
             )}
           </div>
         )}
       </div>
+
+      {/* Logout button */}
+      <div className="pt-2 border-t">
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={handleLogout}
+          className="w-full h-8 text-xs text-muted-foreground hover:text-destructive"
+        >
+          Logout
+        </Button>
+      </div>
     </div>
-  );
-}
-
-function LinkIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      viewBox="0 0 24 24"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-    </svg>
-  );
-}
-
-function CheckIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      viewBox="0 0 24 24"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-    </svg>
   );
 }

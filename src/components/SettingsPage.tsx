@@ -11,7 +11,7 @@ import {
   generatePlayerId,
   generateSecondarySecret,
 } from "@/lib/nostr-crypto";
-import { clearSecondarySecret, getStorageScope } from "@/lib/identity";
+import { clearSecondarySecret } from "@/lib/identity";
 import { clearHistory } from "@/lib/history";
 import {
   loadHistoryFromNostr,
@@ -149,18 +149,10 @@ export function SettingsPage() {
     // Note: New credentials are already published - rotation is complete regardless of local cleanup
     let cleanupFailed = false;
     try {
-      const fingerprint = await getStorageScope(pubkeyHex);
-      if (fingerprint) {
-        try {
-          clearSecondarySecret(fingerprint);
-          clearHistory(fingerprint);
-        } catch (clearErr) {
-          console.error("Failed to clear old data:", clearErr);
-          cleanupFailed = true;
-        }
-      }
-    } catch (err) {
-      console.error("Failed to get storage scope:", err);
+      clearSecondarySecret();
+      clearHistory();
+    } catch (clearErr) {
+      console.error("Failed to clear old data:", clearErr);
       cleanupFailed = true;
     }
 

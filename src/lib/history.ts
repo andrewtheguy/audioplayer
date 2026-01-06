@@ -80,10 +80,9 @@ function isValidHistoryPayload(value: unknown): value is HistoryPayload {
  * Get history payload from localStorage (atomic: history + timestamp together)
  * Returns null if no history exists or on parse error
  */
-function getHistoryPayload(fingerprint: string | undefined): HistoryPayload | null {
-  if (!fingerprint) return null;
+function getHistoryPayload(): HistoryPayload | null {
   try {
-    const key = getHistoryStorageKey(fingerprint);
+    const key = getHistoryStorageKey();
     const data = localStorage.getItem(key);
     if (!data) return null;
 
@@ -119,16 +118,16 @@ function getHistoryPayload(fingerprint: string | undefined): HistoryPayload | nu
 /**
  * Get history entries from localStorage
  */
-export function getHistory(fingerprint: string | undefined): HistoryEntry[] {
-  return getHistoryPayload(fingerprint)?.history ?? [];
+export function getHistory(): HistoryEntry[] {
+  return getHistoryPayload()?.history ?? [];
 }
 
 /**
  * Get the timestamp when history was last saved
  * Returns null if no history exists
  */
-export function getHistoryTimestamp(fingerprint: string | undefined): number | null {
-  return getHistoryPayload(fingerprint)?.timestamp ?? null;
+export function getHistoryTimestamp(): number | null {
+  return getHistoryPayload()?.timestamp ?? null;
 }
 
 /**
@@ -136,12 +135,10 @@ export function getHistoryTimestamp(fingerprint: string | undefined): number | n
  */
 export function saveHistory(
   history: HistoryEntry[],
-  fingerprint: string | undefined,
   sessionId?: string
 ): void {
-  if (!fingerprint) return;
   try {
-    const key = getHistoryStorageKey(fingerprint);
+    const key = getHistoryStorageKey();
     const trimmed = trimHistory(history);
     const payload: HistoryPayload = {
       history: trimmed,
@@ -157,10 +154,9 @@ export function saveHistory(
 /**
  * Clear history from localStorage
  */
-export function clearHistory(fingerprint: string | undefined): void {
-  if (!fingerprint) return;
+export function clearHistory(): void {
   try {
-    const key = getHistoryStorageKey(fingerprint);
+    const key = getHistoryStorageKey();
     localStorage.removeItem(key);
   } catch (err) {
     console.warn("Failed to clear history from localStorage:", err);
