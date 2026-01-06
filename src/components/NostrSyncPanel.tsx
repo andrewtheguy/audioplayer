@@ -601,14 +601,6 @@ export function NostrSyncPanel({
                 <code className="font-mono text-[10px] block mt-0.5 select-all truncate">
                   {localSessionId}
                 </code>
-                {playerId && (
-                  <>
-                    <div className="font-medium mt-1">Player ID:</div>
-                    <code className="font-mono text-[10px] block mt-0.5 select-all truncate">
-                      {playerId.slice(0, 16)}...
-                    </code>
-                  </>
-                )}
                 {sessionStatus === "active" && (
                   <>
                     <Button
