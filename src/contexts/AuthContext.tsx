@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
 import { parseNpub } from "@/lib/nostr-crypto";
 import { isValidSecondarySecret } from "@/lib/nostr-crypto";
 
@@ -17,40 +17,49 @@ interface AuthState {
 }
 
 interface AuthContextValue extends AuthState {
-  login: (npub: string, secondarySecret: string) => { success: boolean; error?: string };
+  login: (npub: string, secondarySecret: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function getInitialAuthState(): AuthState {
-  if (typeof window === "undefined") {
-    return { npub: null, pubkeyHex: null, secondarySecret: null, isLoggedIn: false, isLoading: true };
-  }
-
-  const storedNpub = localStorage.getItem(NPUB_KEY);
-  const storedSecret = localStorage.getItem(SECRET_KEY);
-
-  if (storedNpub && storedSecret) {
-    const pubkeyHex = parseNpub(storedNpub);
-    if (pubkeyHex && isValidSecondarySecret(storedSecret)) {
-      return {
-        npub: storedNpub,
-        pubkeyHex,
-        secondarySecret: storedSecret,
-        isLoggedIn: true,
-        isLoading: false,
-      };
-    }
-  }
-
-  return { npub: null, pubkeyHex: null, secondarySecret: null, isLoggedIn: false, isLoading: false };
-}
+// Initial state is always loading - localStorage is read in useEffect to avoid SSR/hydration mismatch
+const initialAuthState: AuthState = {
+  npub: null,
+  pubkeyHex: null,
+  secondarySecret: null,
+  isLoggedIn: false,
+  isLoading: true,
+};
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AuthState>(getInitialAuthState);
+  const [state, setState] = useState<AuthState>(initialAuthState);
 
-  const login = useCallback((npub: string, secondarySecret: string): { success: boolean; error?: string } => {
+  // Restore auth state from localStorage after mount (client-side only)
+  // This is a valid hydration pattern - reading external state on mount
+  useEffect(() => {
+    const storedNpub = localStorage.getItem(NPUB_KEY);
+    const storedSecret = localStorage.getItem(SECRET_KEY);
+
+    if (storedNpub && storedSecret) {
+      const pubkeyHex = parseNpub(storedNpub);
+      if (pubkeyHex && isValidSecondarySecret(storedSecret)) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setState({
+          npub: storedNpub,
+          pubkeyHex,
+          secondarySecret: storedSecret,
+          isLoggedIn: true,
+          isLoading: false,
+        });
+        return;
+      }
+    }
+
+    setState((prev) => ({ ...prev, isLoading: false }));
+  }, []);
+
+  const login = useCallback(async (npub: string, secondarySecret: string): Promise<{ success: boolean; error?: string }> => {
     // Validate npub
     const pubkeyHex = parseNpub(npub);
     if (!pubkeyHex) {

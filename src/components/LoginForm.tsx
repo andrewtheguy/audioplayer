@@ -36,15 +36,17 @@ export function LoginForm() {
       return;
     }
 
-    const result = login(npub, secret);
-    if (!result.success) {
-      setError(result.error ?? "Login failed");
+    try {
+      const result = await login(npub, secret);
+      if (!result.success) {
+        setError(result.error ?? "Login failed");
+      }
+      // Success - auth context will update and trigger re-render
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Login failed");
+    } finally {
       setIsLoading(false);
-      return;
     }
-
-    // Success - auth context will update and trigger re-render
-    setIsLoading(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

@@ -67,10 +67,12 @@ export function RotateCredentialsPage() {
       privateKeyBytes = decodeNsec(trimmedNsec);
     } catch {
       setMessage("Invalid nsec format.");
+      setStatus("error");
       return;
     }
     if (!privateKeyBytes) {
       setMessage("Invalid nsec format.");
+      setStatus("error");
       return;
     }
 
