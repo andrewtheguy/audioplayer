@@ -37,14 +37,14 @@ export function NostrSyncPanel({
   const [nsecInput, setNsecInput] = useState("");
   const [nsecTouched, setNsecTouched] = useState(false);
 
-  // Validate nsec format (starts with "nsec1" and has reasonable length)
+  // Validate nsec format (bech32: "nsec1" prefix + 58 chars = 63 total)
   const isValidNsecFormat = (value: string): boolean => {
     const trimmed = value.trim();
-    return trimmed.startsWith("nsec1") && trimmed.length >= 60;
+    return trimmed.startsWith("nsec1") && trimmed.length === 63;
   };
 
   const nsecError = nsecTouched && nsecInput.trim() && !isValidNsecFormat(nsecInput)
-    ? "Must start with 'nsec1' and be at least 60 characters"
+    ? "Must start with 'nsec1' and be exactly 63 characters"
     : null;
 
   const {
@@ -130,6 +130,17 @@ export function NostrSyncPanel({
     logout();
   };
 
+  const handleNsecKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    if (!isValidNsecFormat(nsecInput)) return;
+    try {
+      await handleSetupWithNsec();
+    } catch (err) {
+      console.error("Failed to setup with nsec:", err);
+    }
+  };
+
   // Render based on session status
   const renderContent = () => {
     switch (sessionStatus) {
@@ -158,7 +169,7 @@ export function NostrSyncPanel({
                 onBlur={() => setNsecTouched(true)}
                 placeholder="nsec1..."
                 className={cn("h-8 text-xs font-mono", nsecError && "border-destructive")}
-                onKeyDown={(e) => e.key === "Enter" && isValidNsecFormat(nsecInput) && handleSetupWithNsec()}
+                onKeyDown={handleNsecKeyDown}
               />
               {nsecError && (
                 <div className="text-[10px] text-destructive">{nsecError}</div>
