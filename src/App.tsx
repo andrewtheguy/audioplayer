@@ -1,6 +1,6 @@
 import { Routes, Route, Navigate } from "react-router";
 import { AudioPlayer } from "@/components/AudioPlayer";
-import { SettingsPage } from "@/components/SettingsPage";
+import { RotateCredentialsPage } from "@/components/RotateCredentialsPage";
 import { LoginForm } from "@/components/LoginForm";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 
@@ -23,7 +23,7 @@ function HomePage() {
   );
 }
 
-function SettingsRoute() {
+function RotateRoute() {
   const { isLoggedIn, isLoading } = useAuth();
 
   if (isLoading) {
@@ -41,7 +41,7 @@ function SettingsRoute() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4">
-      <SettingsPage />
+      <RotateCredentialsPage />
     </div>
   );
 }
@@ -51,7 +51,7 @@ function App() {
     <AuthProvider>
       <Routes>
         <Route path="/" element={<HomePage />} />
-        <Route path="/settings" element={<SettingsRoute />} />
+        <Route path="/rotate" element={<RotateRoute />} />
       </Routes>
     </AuthProvider>
   );

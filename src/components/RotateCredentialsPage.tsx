@@ -20,7 +20,7 @@ import {
   saveHistoryToNostr,
 } from "@/lib/nostr-sync";
 
-export function SettingsPage() {
+export function RotateCredentialsPage() {
   const navigate = useNavigate();
 
   const [nsecInput, setNsecInput] = useState("");
@@ -180,7 +180,7 @@ export function SettingsPage() {
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Settings</h1>
+        <h1 className="text-xl font-bold">Rotate Credentials</h1>
         <Button variant="ghost" size="sm" onClick={handleBackToHome}>
           ← Back
         </Button>

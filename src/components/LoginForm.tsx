@@ -120,15 +120,15 @@ export function LoginForm() {
       </div>
 
       <div className="text-center space-y-2">
-        <Link to="/settings">
+        <Link to="/rotate">
           <Button variant="outline" className="w-full h-9">
             Generate New Identity
           </Button>
         </Link>
         <p className="text-xs text-muted-foreground">
-          Need to rotate credentials?{" "}
-          <Link to="/settings" className="text-primary hover:underline">
-            Go to Settings
+          Compromised credentials?{" "}
+          <Link to="/rotate" className="text-primary hover:underline">
+            Rotate them here
           </Link>
         </p>
       </div>
