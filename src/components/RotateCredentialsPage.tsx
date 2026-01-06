@@ -11,7 +11,7 @@ import {
   generatePlayerId,
   generateSecondarySecret,
 } from "@/lib/nostr-crypto";
-import { clearSecondarySecret, getStorageScope } from "@/lib/identity";
+import { clearSecondarySecret } from "@/lib/identity";
 import { clearHistory } from "@/lib/history";
 import {
   loadHistoryFromNostr,
@@ -20,7 +20,25 @@ import {
   saveHistoryToNostr,
 } from "@/lib/nostr-sync";
 
-export function SettingsPage() {
+const RELAY_TIMEOUT_MS = 10000;
+
+class TimeoutError extends Error {
+  constructor(message = "Operation timed out") {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
+
+function withTimeout<T>(ms: number, promise: Promise<T>): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new TimeoutError()), ms)
+    ),
+  ]);
+}
+
+export function RotateCredentialsPage() {
   const navigate = useNavigate();
 
   const [nsecInput, setNsecInput] = useState("");
@@ -53,6 +71,9 @@ export function SettingsPage() {
   };
 
   const handleBackToHome = () => {
+    setNsecInput("");
+    setCurrentSecretInput("");
+    setDerivedNpub(null);
     navigate("/");
   };
 
@@ -67,10 +88,12 @@ export function SettingsPage() {
       privateKeyBytes = decodeNsec(trimmedNsec);
     } catch {
       setMessage("Invalid nsec format.");
+      setStatus("error");
       return;
     }
     if (!privateKeyBytes) {
       setMessage("Invalid nsec format.");
+      setStatus("error");
       return;
     }
 
@@ -91,13 +114,19 @@ export function SettingsPage() {
       }
 
       try {
-        // Load old player ID using the provided secret
-        const oldPlayerId = await loadPlayerIdFromNostr(pubkeyHex, trimmedSecret);
+        // Load old player ID using the provided secret (with timeout)
+        const oldPlayerId = await withTimeout(
+          RELAY_TIMEOUT_MS,
+          loadPlayerIdFromNostr(pubkeyHex, trimmedSecret)
+        );
 
         if (oldPlayerId) {
           // Derive old encryption keys and load history
           const oldKeys = await deriveEncryptionKey(oldPlayerId);
-          const historyPayload = await loadHistoryFromNostr(oldKeys);
+          const historyPayload = await withTimeout(
+            RELAY_TIMEOUT_MS,
+            loadHistoryFromNostr(oldKeys)
+          );
 
           if (historyPayload) {
             historyToMigrate = historyPayload.history;
@@ -109,7 +138,11 @@ export function SettingsPage() {
         }
       } catch (err) {
         console.warn("Failed to load history for migration:", err);
-        setMessage("Failed to load history with the provided secret.");
+        if (err instanceof TimeoutError) {
+          setMessage("Relay connection timed out. Please try again.");
+        } else {
+          setMessage("Failed to load history with the provided secret.");
+        }
         setStatus("error");
         return;
       }
@@ -149,18 +182,10 @@ export function SettingsPage() {
     // Note: New credentials are already published - rotation is complete regardless of local cleanup
     let cleanupFailed = false;
     try {
-      const fingerprint = await getStorageScope(pubkeyHex);
-      if (fingerprint) {
-        try {
-          clearSecondarySecret(fingerprint);
-          clearHistory(fingerprint);
-        } catch (clearErr) {
-          console.error("Failed to clear old data:", clearErr);
-          cleanupFailed = true;
-        }
-      }
-    } catch (err) {
-      console.error("Failed to get storage scope:", err);
+      clearSecondarySecret();
+      clearHistory();
+    } catch (clearErr) {
+      console.error("Failed to clear old data:", clearErr);
       cleanupFailed = true;
     }
 
@@ -188,7 +213,7 @@ export function SettingsPage() {
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Settings</h1>
+        <h1 className="text-xl font-bold">Rotate Credentials</h1>
         <Button variant="ghost" size="sm" onClick={handleBackToHome}>
           ← Back
         </Button>
@@ -198,10 +223,13 @@ export function SettingsPage() {
         <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-md">
           <h2 className="text-sm font-semibold text-amber-700 mb-2">Rotate Player ID</h2>
           <p className="text-xs text-amber-600 mb-4">
-            This generates a new player ID AND a new secondary secret.
-            Your history will be migrated to the new player ID automatically.
-            Only use this if you believe your credentials have been compromised.
+            This generates a new player ID and secondary secret. Use this if:
           </p>
+          <ul className="text-xs text-amber-600 mb-4 list-disc pl-4 space-y-1">
+            <li>Sessions are stuck or not syncing properly across devices</li>
+            <li>You believe your credentials have been compromised</li>
+            <li>You want a completely fresh start</li>
+          </ul>
 
           {status === "success" && newSecondarySecret ? (
             <div className="space-y-3">
@@ -248,41 +276,50 @@ export function SettingsPage() {
                 </div>
               )}
 
-              {!skipHistoryMigration && (
-                <div className="space-y-1">
-                  <label className="text-xs font-medium">Current secondary secret</label>
-                  <Input
-                    type="password"
-                    value={currentSecretInput}
-                    onChange={(e) => setCurrentSecretInput(e.target.value)}
-                    placeholder="Enter your current secondary secret"
-                    className="h-8 text-xs font-mono"
+              <div className="p-3 bg-muted/30 rounded border border-border space-y-3">
+                <div className="text-xs font-medium">History Migration</div>
+
+                <div className="flex items-start space-x-2">
+                  <Checkbox
+                    id="skip-history"
+                    checked={skipHistoryMigration}
+                    onCheckedChange={(checked: boolean | "indeterminate") => setSkipHistoryMigration(checked === true)}
                     disabled={status === "loading"}
                   />
-                  <p className="text-[10px] text-muted-foreground">
-                    Required to decrypt and migrate your history.
-                  </p>
+                  <div className="grid gap-1 leading-none">
+                    <label
+                      htmlFor="skip-history"
+                      className="text-xs font-medium cursor-pointer"
+                    >
+                      Skip history migration (start fresh)
+                    </label>
+                    <p className="text-[10px] text-muted-foreground">
+                      Check this if you don't have your current secret or want a clean slate.
+                    </p>
+                    {skipHistoryMigration && (
+                      <p className="text-[10px] text-red-600 font-medium">
+                        Warning: Your listening history will be permanently lost!
+                      </p>
+                    )}
+                  </div>
                 </div>
-              )}
 
-              <div className="flex items-start space-x-2">
-                <Checkbox
-                  id="skip-history"
-                  checked={skipHistoryMigration}
-                  onCheckedChange={(checked: boolean | "indeterminate") => setSkipHistoryMigration(checked === true)}
-                  disabled={status === "loading"}
-                />
-                <div className="grid gap-1 leading-none">
-                  <label
-                    htmlFor="skip-history"
-                    className="text-xs font-medium cursor-pointer"
-                  >
-                    Skip history migration
-                  </label>
-                  <p className="text-[10px] text-red-600">
-                    Warning: Your listening history will be permanently lost!
-                  </p>
-                </div>
+                {!skipHistoryMigration && (
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Current secondary secret</label>
+                    <Input
+                      type="password"
+                      value={currentSecretInput}
+                      onChange={(e) => setCurrentSecretInput(e.target.value)}
+                      placeholder="Enter your current secondary secret"
+                      className="h-8 text-xs font-mono"
+                      disabled={status === "loading"}
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      Required to decrypt and migrate your listening history to the new credentials.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {message && status === "error" && (
