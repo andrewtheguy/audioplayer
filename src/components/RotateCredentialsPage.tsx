@@ -190,10 +190,13 @@ export function RotateCredentialsPage() {
         <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-md">
           <h2 className="text-sm font-semibold text-amber-700 mb-2">Rotate Player ID</h2>
           <p className="text-xs text-amber-600 mb-4">
-            This generates a new player ID AND a new secondary secret.
-            Your history will be migrated to the new player ID automatically.
-            Only use this if you believe your credentials have been compromised.
+            This generates a new player ID and secondary secret. Use this if:
           </p>
+          <ul className="text-xs text-amber-600 mb-4 list-disc pl-4 space-y-1">
+            <li>Sessions are stuck or not syncing properly across devices</li>
+            <li>You believe your credentials have been compromised</li>
+            <li>You want a completely fresh start</li>
+          </ul>
 
           {status === "success" && newSecondarySecret ? (
             <div className="space-y-3">
@@ -240,41 +243,50 @@ export function RotateCredentialsPage() {
                 </div>
               )}
 
-              {!skipHistoryMigration && (
-                <div className="space-y-1">
-                  <label className="text-xs font-medium">Current secondary secret</label>
-                  <Input
-                    type="password"
-                    value={currentSecretInput}
-                    onChange={(e) => setCurrentSecretInput(e.target.value)}
-                    placeholder="Enter your current secondary secret"
-                    className="h-8 text-xs font-mono"
+              <div className="p-3 bg-muted/30 rounded border border-border space-y-3">
+                <div className="text-xs font-medium">History Migration</div>
+
+                <div className="flex items-start space-x-2">
+                  <Checkbox
+                    id="skip-history"
+                    checked={skipHistoryMigration}
+                    onCheckedChange={(checked: boolean | "indeterminate") => setSkipHistoryMigration(checked === true)}
                     disabled={status === "loading"}
                   />
-                  <p className="text-[10px] text-muted-foreground">
-                    Required to decrypt and migrate your history.
-                  </p>
+                  <div className="grid gap-1 leading-none">
+                    <label
+                      htmlFor="skip-history"
+                      className="text-xs font-medium cursor-pointer"
+                    >
+                      Skip history migration (start fresh)
+                    </label>
+                    <p className="text-[10px] text-muted-foreground">
+                      Check this if you don't have your current secret or want a clean slate.
+                    </p>
+                    {skipHistoryMigration && (
+                      <p className="text-[10px] text-red-600 font-medium">
+                        Warning: Your listening history will be permanently lost!
+                      </p>
+                    )}
+                  </div>
                 </div>
-              )}
 
-              <div className="flex items-start space-x-2">
-                <Checkbox
-                  id="skip-history"
-                  checked={skipHistoryMigration}
-                  onCheckedChange={(checked: boolean | "indeterminate") => setSkipHistoryMigration(checked === true)}
-                  disabled={status === "loading"}
-                />
-                <div className="grid gap-1 leading-none">
-                  <label
-                    htmlFor="skip-history"
-                    className="text-xs font-medium cursor-pointer"
-                  >
-                    Skip history migration
-                  </label>
-                  <p className="text-[10px] text-red-600">
-                    Warning: Your listening history will be permanently lost!
-                  </p>
-                </div>
+                {!skipHistoryMigration && (
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Current secondary secret</label>
+                    <Input
+                      type="password"
+                      value={currentSecretInput}
+                      onChange={(e) => setCurrentSecretInput(e.target.value)}
+                      placeholder="Enter your current secondary secret"
+                      className="h-8 text-xs font-mono"
+                      disabled={status === "loading"}
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      Required to decrypt and migrate your listening history to the new credentials.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {message && status === "error" && (

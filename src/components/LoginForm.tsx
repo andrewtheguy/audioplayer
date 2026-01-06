@@ -126,9 +126,9 @@ export function LoginForm() {
           </Button>
         </Link>
         <p className="text-xs text-muted-foreground">
-          Compromised credentials?{" "}
+          Sync issues or need a fresh start?{" "}
           <Link to="/rotate" className="text-primary hover:underline">
-            Rotate them here
+            Rotate credentials
           </Link>
         </p>
       </div>
