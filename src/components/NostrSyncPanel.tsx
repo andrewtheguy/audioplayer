@@ -39,7 +39,6 @@ export function NostrSyncPanel({
 
   const [showDetails, setShowDetails] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [displayFingerprint, setDisplayFingerprint] = useState<string | undefined>(undefined);
 
   // Input states
   const [secondarySecretInput, setSecondarySecretInput] = useState("");
@@ -122,7 +121,6 @@ export function NostrSyncPanel({
   useEffect(() => {
     if (!pubkeyHex) {
       onFingerprintChange?.(undefined);
-      setDisplayFingerprint(undefined);
       return;
     }
     let cancelled = false;
@@ -130,16 +128,12 @@ export function NostrSyncPanel({
       .then((fingerprint) => {
         if (!cancelled) {
           onFingerprintChange?.(fingerprint);
-          // Format with dashes for display: XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX
-          const formatted = fingerprint.toUpperCase().match(/.{1,8}/g)?.join("-");
-          setDisplayFingerprint(formatted);
         }
       })
       .catch((err) => {
         console.error("Failed to compute storage fingerprint:", err);
         if (!cancelled) {
           onFingerprintChange?.(undefined);
-          setDisplayFingerprint(undefined);
         }
       });
     return () => {
@@ -592,10 +586,6 @@ export function NostrSyncPanel({
                 <div className="font-medium">npub:</div>
                 <code className="font-mono text-[10px] block mt-0.5 select-all break-all">
                   {npub}
-                </code>
-                <div className="font-medium mt-1">Storage Fingerprint:</div>
-                <code className="font-mono text-[10px] block mt-0.5 select-all">
-                  {displayFingerprint || "..."}
                 </code>
                 <div className="font-medium mt-1">Session ID:</div>
                 <code className="font-mono text-[10px] block mt-0.5 select-all truncate">
